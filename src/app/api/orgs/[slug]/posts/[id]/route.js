@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
+import { logActivity } from '../../../../../../server/activity.js';
 
 // PATCH /api/orgs/[slug]/posts/[id] — mark reviewed
 export async function PATCH(request, { params }) {
@@ -19,7 +20,7 @@ export async function PATCH(request, { params }) {
     if (!existing.length) return NextResponse.json({ error: 'post not found' }, { status: 404 });
 
     const body = await request.json();
-    const { reviewed, post_status, notes, manually_escalated, saved, dismiss_reason } = body;
+    const { reviewed, post_status, notes, manually_escalated, saved, dismiss_reason, snoozed_until } = body;
 
     const fields = [];
     const values = [];
@@ -56,6 +57,10 @@ export async function PATCH(request, { params }) {
       fields.push(`dismiss_reason = $${idx++}`);
       values.push(dismiss_reason);
     }
+    if (snoozed_until !== undefined) {
+      fields.push(`snoozed_until = $${idx++}`);
+      values.push(snoozed_until || null);
+    }
 
     if (!fields.length) {
       return NextResponse.json({ error: 'no fields to update' }, { status: 400 });
@@ -67,7 +72,20 @@ export async function PATCH(request, { params }) {
       values
     );
 
-    return NextResponse.json(rows[0]);
+    const updated = rows[0];
+    const actorName = user.name || user.email;
+
+    // Fire-and-forget activity logging for meaningful state changes
+    const logBase = { orgId: access.orgId, userId: user.id, userName: actorName, entityType: 'post', entityId: id, entityTitle: updated.title?.slice(0, 80) };
+    if (post_status === 'archived')     logActivity({ ...logBase, action: 'archived' }).catch(() => {});
+    if (post_status === 'dismissed')    logActivity({ ...logBase, action: 'dismissed', meta: dismiss_reason ? { reason: dismiss_reason } : null }).catch(() => {});
+    if (post_status === 'acknowledged') logActivity({ ...logBase, action: 'acknowledged' }).catch(() => {});
+    if (post_status === 'resolved')     logActivity({ ...logBase, action: 'resolved' }).catch(() => {});
+    if (manually_escalated === true)    logActivity({ ...logBase, action: 'escalated' }).catch(() => {});
+    if (saved === true)                 logActivity({ ...logBase, action: 'saved' }).catch(() => {});
+    if (snoozed_until)                  logActivity({ ...logBase, action: 'snoozed', meta: { until: snoozed_until } }).catch(() => {});
+
+    return NextResponse.json(updated);
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

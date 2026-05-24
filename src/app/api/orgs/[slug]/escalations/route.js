@@ -17,11 +17,14 @@ export async function GET(request, { params }) {
     const { rows } = await query(
       `SELECT er.*,
          COALESCE(
-           json_agg(c.*) FILTER (WHERE c.id IS NOT NULL),
+           json_agg(DISTINCT c.*) FILTER (WHERE c.id IS NOT NULL),
            '[]'
-         ) as category_details
+         ) as category_details,
+         COALESCE(SUM(efl.fire_count), 0) as total_fires,
+         MAX(efl.last_fired_at) as last_fired_at
        FROM escalation_rules er
        LEFT JOIN categories c ON c.id = ANY(er.category_ids) AND c.org_id = er.org_id
+       LEFT JOIN escalation_fire_log efl ON efl.rule_id = er.id
        WHERE er.org_id = $1
        GROUP BY er.id
        ORDER BY er.created_at DESC`,

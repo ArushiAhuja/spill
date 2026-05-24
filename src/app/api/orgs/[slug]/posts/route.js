@@ -35,9 +35,12 @@ export async function GET(request, { params }) {
       conditions.push(`p.post_status = 'archived'`);
     } else if (status_filter === 'dismissed') {
       conditions.push(`p.post_status = 'dismissed'`);
+    } else if (status_filter === 'snoozed') {
+      conditions.push(`p.snoozed_until IS NOT NULL AND p.snoozed_until > NOW()`);
     } else {
-      // default feed: hide archived and dismissed
+      // default feed: hide archived, dismissed, and currently snoozed
       conditions.push(`(p.post_status IS NULL OR p.post_status NOT IN ('archived', 'dismissed'))`);
+      conditions.push(`(p.snoozed_until IS NULL OR p.snoozed_until <= NOW())`);
     }
 
     if (source) {

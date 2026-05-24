@@ -109,4 +109,13 @@ export const api = {
   createInvitation: (slug, body) => request('POST', `/orgs/${slug}/invitations`, body),
   revokeInvitation: (slug, id) => request('DELETE', `/orgs/${slug}/invitations/${id}`),
   resendInvitation: (slug, id) => request('POST', `/orgs/${slug}/invitations/${id}/resend`),
+
+  // Activity log
+  getActivity: (slug, params = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))).toString()
+    return request('GET', `/orgs/${slug}/activity${qs ? `?${qs}` : ''}`)
+  },
+
+  // Snooze
+  snoozePost: (slug, id, until) => request('PATCH', `/orgs/${slug}/posts/${id}`, { snoozed_until: until || null }),
 }

@@ -614,6 +614,75 @@ function InviteSection({ slug }) {
   )
 }
 
+function ActivitySection({ slug }) {
+  const [activity, setActivity] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.getActivity(slug, { limit: 50 })
+      .then(d => setActivity(d.activity || []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [slug])
+
+  function label(entry) {
+    const actor = entry.user_name || 'someone'
+    const title = entry.entity_title ? `"${entry.entity_title.slice(0, 40)}"` : null
+    const map = {
+      archived: `${actor} archived ${title || 'a post'}`,
+      dismissed: `${actor} dismissed ${title || 'a post'}`,
+      acknowledged: `${actor} acknowledged ${title || 'a post'}`,
+      resolved: `${actor} resolved ${title || 'a post'}`,
+      saved: `${actor} saved ${title || 'a post'}`,
+      escalated: `${actor} manually escalated ${title || 'a post'}`,
+      snoozed: `${actor} snoozed ${title || 'a post'}`,
+      feedback: `${actor} gave feedback on ${title || 'a post'}`,
+      rule_enabled: `${actor} enabled rule ${title || ''}`,
+      rule_disabled: `${actor} disabled rule ${title || ''}`,
+      rule_fired: `rule ${title || ''} fired automatically`,
+      invite_sent: `${actor} invited someone`,
+      member_joined: `${entry.entity_title || 'someone'} joined the workspace`,
+    }
+    return map[entry.action] || `${actor} · ${entry.action.replace(/_/g, ' ')}`
+  }
+
+  function fmt(ts) {
+    const d = new Date(ts)
+    const now = new Date()
+    const isToday = d.toDateString() === now.toDateString()
+    const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    if (isToday) return timeStr
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${timeStr}`
+  }
+
+  return (
+    <section style={{ marginBottom: 40 }}>
+      <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 16, paddingBottom: 8, borderBottom: '1px solid #1e2535' }}>
+        activity log
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 12, color: '#334155' }}>loading...</div>
+      ) : activity.length === 0 ? (
+        <div style={{ fontSize: 12, color: '#334155' }}>no activity yet — actions like archive, dismiss, escalate, and feedback will appear here.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {activity.map(entry => (
+            <div key={entry.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 0', borderBottom: '1px solid #0f111a' }}>
+              <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#243047', flexShrink: 0, marginTop: 6 }} />
+              <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: '#64748b', lineHeight: 1.4 }}>
+                {label(entry)}
+              </div>
+              <div style={{ fontSize: 10.5, color: '#334155', fontFamily: 'var(--font-mono)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                {fmt(entry.created_at)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function SettingsPage({ params }) {
   const slug = params.org
   const router = useRouter()
@@ -1179,6 +1248,9 @@ export default function SettingsPage({ params }) {
           </div>
         </Link>
       </section>
+
+      {/* Activity log section */}
+      <ActivitySection slug={slug} />
 
       {/* Invite team section */}
       <InviteSection slug={slug} />

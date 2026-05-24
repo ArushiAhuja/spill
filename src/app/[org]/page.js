@@ -489,6 +489,7 @@ export default function FeedPage({ params }) {
       else if (viewTab === 'saved') fetchParams.status_filter = 'saved'
       else if (viewTab === 'archived') fetchParams.status_filter = 'archived'
       else if (viewTab === 'dismissed') fetchParams.status_filter = 'dismissed'
+      else if (viewTab === 'snoozed') fetchParams.status_filter = 'snoozed'
       const data = await api.getPosts(slug, fetchParams)
       setPosts(data.posts || [])
       setTotal(data.total || 0)
@@ -717,6 +718,49 @@ export default function FeedPage({ params }) {
   }
 
 
+  function formatSnoozeTime(until) {
+    const d = new Date(until)
+    const now = new Date()
+    const isToday = d.toDateString() === now.toDateString()
+    const isTomorrow = d.toDateString() === new Date(Date.now() + 86400000).toDateString()
+    const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    if (isToday) return `today ${timeStr}`
+    if (isTomorrow) return `tomorrow ${timeStr}`
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${timeStr}`
+  }
+
+  async function handleSnooze(post, duration) {
+    let until = null
+    if (duration !== null) {
+      if (duration === 'tomorrow') {
+        const d = new Date()
+        d.setDate(d.getDate() + 1)
+        d.setHours(9, 0, 0, 0)
+        until = d.toISOString()
+      } else {
+        until = new Date(Date.now() + duration * 60 * 60 * 1000).toISOString()
+      }
+    }
+    setPosts(p => p.filter(x => x.id !== post.id))
+    try {
+      await api.snoozePost(slug, post.id, until)
+      if (until) {
+        addToast({
+          message: `snoozed until ${formatSnoozeTime(until)}`,
+          sub: 'will return to feed after snooze ends',
+          undoFn: () => {
+            api.snoozePost(slug, post.id, null).catch(() => {})
+            fetchPosts()
+          },
+        })
+      } else {
+        fetchPosts()
+      }
+    } catch {
+      fetchPosts()
+    }
+  }
+
   async function handleMarkSelectedRead() {
     const ids = Array.from(selectedIds)
     const results = await Promise.allSettled(ids.map(id => api.updatePost(slug, id, { reviewed: true })))
@@ -907,6 +951,7 @@ export default function FeedPage({ params }) {
             { key: 'feed', label: 'feed' },
             { key: 'escalated', label: '⚡ escalated' },
             { key: 'saved', label: '⊡ saved' },
+            { key: 'snoozed', label: '⏸ snoozed' },
             { key: 'archived', label: '⊘ archived' },
             { key: 'dismissed', label: '× dismissed' },
           ].map(tab => (
@@ -1312,6 +1357,11 @@ export default function FeedPage({ params }) {
                   )}
 
                   {/* Status badges */}
+                  {viewTab === 'snoozed' && post.snoozed_until && (
+                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 99, flexShrink: 0, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                      ⏸ {formatSnoozeTime(post.snoozed_until)}
+                    </span>
+                  )}
                   {post.manually_escalated && (
                     <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 99, flexShrink: 0, color: '#f87171', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)' }}>
                       escalated
@@ -1353,6 +1403,14 @@ export default function FeedPage({ params }) {
                       { label: 'mark resolved', sub: 'close this thread', fn: () => handleUpdateStatus(post, 'resolved'), disabled: post.post_status === 'resolved' },
                       { label: post.manually_escalated ? 'remove escalation' : 'escalate', sub: 'fire escalation rules now', fn: () => handleEscalate(post) },
                       { label: post.saved_at ? 'unsave' : 'save', sub: 'pin to saved view', fn: () => handleSave(post) },
+                      ...(post.snoozed_until
+                        ? [{ label: 'unsnooze', sub: 'return to feed now', fn: () => handleSnooze(post, null) }]
+                        : [
+                            { label: 'snooze 2h', sub: `until ${formatSnoozeTime(new Date(Date.now() + 7200000).toISOString())}`, fn: () => handleSnooze(post, 2) },
+                            { label: 'snooze 4h', sub: `until ${formatSnoozeTime(new Date(Date.now() + 14400000).toISOString())}`, fn: () => handleSnooze(post, 4) },
+                            { label: 'snooze tomorrow', sub: 'hide until 9am tomorrow', fn: () => handleSnooze(post, 'tomorrow') },
+                          ]
+                      ),
                       { label: 'give feedback', sub: 'teach spill what matters to you', fn: () => { setFeedbackPostId(post.id); setExpandedPostId(post.id) } },
                       { label: 'assign', sub: 'invite team from settings', fn: () => addToast({ message: 'assign coming soon', sub: 'invite your team from settings to enable' }) },
                     ]}

@@ -1,7 +1,8 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
+import { timeAgo } from '@/lib/auth'
 
 function SetupHelp({ steps }) {
   const [open, setOpen] = useState(false)
@@ -134,7 +135,18 @@ function EscalationModal({ title, onClose, onSave, saving, initial, categories }
   const [actionType, setActionType] = useState(initial?.action_type || 'email')
   const [config, setConfig] = useState(initial?.config || {})
   const [enabled, setEnabled] = useState(initial?.enabled !== false)
+  const [muteWindows, setMuteWindows] = useState(initial?.mute_windows || [])
   const [err, setErr] = useState('')
+
+  function addMuteWindow() {
+    setMuteWindows(prev => [...prev, { start: '22:00', end: '06:00' }])
+  }
+  function removeMuteWindow(idx) {
+    setMuteWindows(prev => prev.filter((_, i) => i !== idx))
+  }
+  function updateMuteWindow(idx, key, val) {
+    setMuteWindows(prev => prev.map((w, i) => i === idx ? { ...w, [key]: val } : w))
+  }
 
   function toggleCat(id) {
     setSelectedCats((prev) => {
@@ -161,6 +173,7 @@ function EscalationModal({ title, onClose, onSave, saving, initial, categories }
         action_type: actionType,
         config,
         enabled,
+        mute_windows: muteWindows,
       })
     } catch (error) {
       setErr(error.message || 'error saving')
@@ -390,6 +403,37 @@ function EscalationModal({ title, onClose, onSave, saving, initial, categories }
               </div>
             </>
           )}
+
+          {/* Mute windows */}
+          <div>
+            <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
+              quiet hours{' '}
+              <span style={{ color: '#334155', textTransform: 'none', letterSpacing: 0 }}>(UTC — no alerts during these windows)</span>
+            </div>
+            {muteWindows.map((w, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <input type="time" value={w.start} onChange={e => updateMuteWindow(i, 'start', e.target.value)} style={{ flex: 1, fontSize: 12.5 }} />
+                <span style={{ color: '#334155', fontSize: 12, flexShrink: 0 }}>–</span>
+                <input type="time" value={w.end} onChange={e => updateMuteWindow(i, 'end', e.target.value)} style={{ flex: 1, fontSize: 12.5 }} />
+                <button
+                  type="button"
+                  onClick={() => removeMuteWindow(i)}
+                  style={{ background: 'none', border: 'none', color: '#334155', cursor: 'pointer', padding: '0 4px', fontSize: 14, lineHeight: 1, transition: 'color 0.1s' }}
+                  onMouseEnter={e => e.currentTarget.style.color = '#f87171'}
+                  onMouseLeave={e => e.currentTarget.style.color = '#334155'}
+                >×</button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={addMuteWindow}
+              style={{ fontSize: 11.5, color: '#334155', background: 'none', border: '1px dashed #1e2535', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.12s', marginTop: muteWindows.length > 0 ? 4 : 0 }}
+              onMouseEnter={e => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.borderColor = '#334155' }}
+              onMouseLeave={e => { e.currentTarget.style.color = '#334155'; e.currentTarget.style.borderColor = '#1e2535' }}
+            >
+              + add quiet window
+            </button>
+          </div>
 
           {/* Enabled toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -685,6 +729,16 @@ export default function EscalationsPage({ params }) {
                     </div>
                   ) : (
                     <span style={{ fontSize: 11, color: '#334155' }}>all categories</span>
+                  )}
+                  {Number(rule.total_fires) > 0 && (
+                    <span style={{ fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                      fired {rule.total_fires}×{rule.last_fired_at ? ` · ${timeAgo(rule.last_fired_at)}` : ''}
+                    </span>
+                  )}
+                  {(rule.mute_windows || []).length > 0 && (
+                    <span style={{ fontSize: 10, color: '#f59e0b', fontFamily: 'var(--font-mono)' }}>
+                      ⏸ {rule.mute_windows.length} quiet window{rule.mute_windows.length > 1 ? 's' : ''}
+                    </span>
                   )}
                 </div>
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
+import { logActivity } from '../../../../../../server/activity.js';
 
 const VALID_ACTION_TYPES = ['email', 'webhook', 'sheets', 'slack'];
 
@@ -15,12 +16,13 @@ export async function PATCH(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const { rows: existing } = await query(
-      'SELECT id FROM escalation_rules WHERE id = $1 AND org_id = $2',
+      'SELECT id, name, enabled FROM escalation_rules WHERE id = $1 AND org_id = $2',
       [id, access.orgId]
     );
     if (!existing.length) return NextResponse.json({ error: 'escalation rule not found' }, { status: 404 });
 
-    const { name, category_ids, score_threshold, action_type, config, enabled } = await request.json();
+    const body = await request.json();
+    const { name, category_ids, score_threshold, action_type, config, enabled, mute_windows } = body;
     const fields = [];
     const values = [];
     let idx = 1;
@@ -36,6 +38,7 @@ export async function PATCH(request, { params }) {
     }
     if (config !== undefined) { fields.push(`config = $${idx++}`); values.push(config); }
     if (enabled !== undefined) { fields.push(`enabled = $${idx++}`); values.push(enabled); }
+    if (mute_windows !== undefined) { fields.push(`mute_windows = $${idx++}`); values.push(JSON.stringify(Array.isArray(mute_windows) ? mute_windows : [])); }
 
     if (!fields.length) {
       return NextResponse.json({ error: 'no fields to update' }, { status: 400 });
@@ -49,7 +52,12 @@ export async function PATCH(request, { params }) {
       values
     );
 
-    return NextResponse.json(rows[0]);
+    const rule = rows[0];
+    const logBase = { orgId: access.orgId, userId: user.id, userName: user.name || user.email, entityType: 'escalation_rule', entityId: id, entityTitle: rule.name };
+    if (enabled === true && !existing[0].enabled)  logActivity({ ...logBase, action: 'rule_enabled' }).catch(() => {});
+    if (enabled === false && existing[0].enabled)  logActivity({ ...logBase, action: 'rule_disabled' }).catch(() => {});
+
+    return NextResponse.json(rule);
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

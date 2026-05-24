@@ -140,5 +140,29 @@ export async function ensureMigrations() {
     )
   `);
 
+  // Phase 10: enterprise ops
+  // Activity / audit log
+  await query(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      user_name TEXT,
+      entity_type TEXT NOT NULL,
+      entity_id UUID,
+      entity_title TEXT,
+      action TEXT NOT NULL,
+      meta JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_activity_log_org ON activity_log(org_id, created_at DESC)`);
+
+  // Post snooze
+  await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMPTZ`);
+
+  // Escalation rule mute windows (stored as JSONB array)
+  await query(`ALTER TABLE escalation_rules ADD COLUMN IF NOT EXISTS mute_windows JSONB DEFAULT '[]'`);
+
   _done = true;
 }

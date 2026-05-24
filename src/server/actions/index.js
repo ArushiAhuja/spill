@@ -3,6 +3,17 @@ import { appendToSheet } from './sheets.js';
 import { sendSlack } from './slack.js';
 import { query } from '../db.js';
 
+function isInMuteWindow(muteWindows) {
+  if (!muteWindows?.length) return false
+  const now = new Date()
+  const hhmm = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`
+  return muteWindows.some(w => {
+    if (!w.start || !w.end) return false
+    if (w.start <= w.end) return hhmm >= w.start && hhmm < w.end
+    return hhmm >= w.start || hhmm < w.end // crosses midnight
+  })
+}
+
 export async function fireEscalations(posts, { orgId, rules, categories }) {
   const THRESHOLDS = [1, 10, 25, 50, 100]
   const WINDOW_MINUTES = 60
@@ -12,6 +23,7 @@ export async function fireEscalations(posts, { orgId, rules, categories }) {
       const categoryMatch = rule.category_ids.length === 0 || rule.category_ids.includes(post.category_id)
       const scoreMatch = post.escalation_score >= rule.score_threshold
       if (!categoryMatch || !scoreMatch) continue
+      if (isInMuteWindow(rule.mute_windows)) continue
 
       const category = categories.find(c => c.id === post.category_id)
       const catId = post.category_id || null
