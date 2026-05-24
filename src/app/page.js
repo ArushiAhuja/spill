@@ -102,60 +102,45 @@ function scoreBg(s) {
 function Nav({ hasToken }) {
   return (
     <nav style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      height: 56,
-      background: 'rgba(8,10,18,0.9)',
-      backdropFilter: 'blur(12px)',
-      WebkitBackdropFilter: 'blur(12px)',
-      borderBottom: '1px solid #1e2535',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '0 28px',
-      zIndex: 100,
+      position: 'fixed', top: 0, left: 0, right: 0, height: 56,
+      background: 'rgba(8,10,18,0.92)', backdropFilter: 'blur(12px)',
+      WebkitBackdropFilter: 'blur(12px)', borderBottom: '1px solid #1e2535',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '0 28px', zIndex: 100,
     }}>
-      <div style={{
-        fontFamily: 'var(--font-mono)',
-        fontSize: 13,
-        fontWeight: 400,
-        letterSpacing: '0.25em',
-        color: '#e2e8f0',
-      }}>
+      <Link href="/" style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 400, letterSpacing: '0.25em', color: '#e2e8f0' }}>
         spill
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+      </Link>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+        <a href="#how" style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: '#64748b', letterSpacing: '0.01em', transition: 'color 0.12s' }}
+          onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
+          onMouseLeave={e => e.currentTarget.style.color = '#64748b'}>
+          how it works
+        </a>
+        <Link href="/pricing" style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: '#64748b', letterSpacing: '0.01em', transition: 'color 0.12s' }}
+          onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
+          onMouseLeave={e => e.currentTarget.style.color = '#64748b'}>
+          pricing
+        </Link>
         {hasToken ? (
-          <Link href="/orgs" style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12,
-            color: '#3b82f6',
-            letterSpacing: '0.03em',
-          }}>
+          <Link href="/orgs" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#3b82f6', letterSpacing: '0.03em' }}>
             dashboard →
           </Link>
         ) : (
           <>
-            <Link href="/login" style={{
-              fontFamily: 'var(--font-sans)',
-              fontSize: 13,
-              color: '#64748b',
-              letterSpacing: '0.01em',
-            }}>
-              sign in
+            <Link href="/login" style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: '#64748b', letterSpacing: '0.01em', transition: 'color 0.12s' }}
+              onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
+              onMouseLeave={e => e.currentTarget.style.color = '#64748b'}>
+              login
             </Link>
             <Link href="/signup" style={{
-              fontFamily: 'var(--font-sans)',
-              fontSize: 13,
-              color: '#e2e8f0',
-              background: '#3b82f6',
-              padding: '6px 14px',
-              borderRadius: 8,
-              fontWeight: 500,
-            }}>
-              start watching →
+              fontFamily: 'var(--font-sans)', fontSize: 13, color: '#e2e8f0',
+              background: '#3b82f6', padding: '6px 16px', borderRadius: 8, fontWeight: 500,
+              transition: 'opacity 0.15s',
+            }}
+              onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
+              onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
+              get started →
             </Link>
           </>
         )}
