@@ -172,7 +172,7 @@ function labelColor(id, neg) {
   return '#64748b'
 }
 
-function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange }) {
+function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFeedbackSubmit }) {
   const [selectedLabel, setSelectedLabel] = useState(null)
   const [selectedCat, setSelectedCat] = useState(post.category_id || '')
   const [explanation, setExplanation] = useState('')
@@ -203,8 +203,10 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange }) {
         onCategoryChange?.(selectedCat)
       }
       setHistory(prev => [{ label: selectedLabel, explanation: explanation.trim() || null, created_at: new Date().toISOString() }, ...prev])
+      const submittedLabel = selectedLabel
       setSelectedLabel(null)
       setExplanation('')
+      onFeedbackSubmit?.(submittedLabel)
       setSubmitted(true)
       setTimeout(() => setSubmitted(false), 4000)
     } catch { /* ignore */ } finally { setSubmitting(false) }
@@ -288,13 +290,17 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange }) {
         >
           {submitting ? '…' : 'submit feedback'}
         </button>
-        <span style={{ fontSize: 10, color: '#1e2535' }}>
-          {['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic'].includes(selectedLabel)
-            ? 'spill will exclude similar posts from future cycles'
-            : selectedLabel === 'high_signal' || selectedLabel === 'useful'
-            ? 'spill will prioritize similar posts going forward'
-            : 'feedback helps tune classification'}
-        </span>
+        {selectedLabel && (
+          <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>
+            {['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate'].includes(selectedLabel)
+              ? 'spill will exclude similar posts from future cycles'
+              : selectedLabel === 'high_signal' || selectedLabel === 'useful'
+              ? 'spill will prioritize similar signals going forward'
+              : selectedLabel === 'missed_category'
+              ? 'classification will be corrected on this post'
+              : 'feedback helps tune classification'}
+          </span>
+        )}
       </div>
 
       {/* Feedback history */}
@@ -464,6 +470,7 @@ export default function FeedPage({ params }) {
   const [feedbackPostId, setFeedbackPostId] = useState(null)
   const [toasts, setToasts] = useState([])
   const toastTimersRef = useRef({})
+  const [feedbackLoggedIds, setFeedbackLoggedIds] = useState(new Set())
 
   const fetchPosts = useCallback(async () => {
     setLoading(true)
@@ -566,7 +573,7 @@ export default function FeedPage({ params }) {
       await api.updatePost(slug, post.id, { reviewed: willMarkRead })
       addToast({
         message: willMarkRead ? 'marked as read' : 'marked as unread',
-        sub: willMarkRead ? "doesn't affect escalation score" : null,
+        sub: willMarkRead ? 'stays in feed, dimmed · does not affect scoring' : null,
         undoFn: () => {
           setPosts(prev => prev.map(p => p.id === post.id ? { ...p, reviewed: prev_reviewed } : p))
           api.updatePost(slug, post.id, { reviewed: prev_reviewed }).catch(() => {})
@@ -602,6 +609,20 @@ export default function FeedPage({ params }) {
     setToasts(prev => prev.filter(t => t.id !== id))
   }
 
+  const NEGATIVE_LABELS = ['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate']
+  const POSITIVE_LABELS = ['high_signal', 'useful', 'missed_category']
+  function handleFeedbackSubmit(postId, label) {
+    setFeedbackLoggedIds(prev => new Set([...prev, postId]))
+    addToast({
+      message: 'feedback logged',
+      sub: NEGATIVE_LABELS.includes(label)
+        ? 'spill will exclude similar posts in future cycles'
+        : POSITIVE_LABELS.includes(label)
+        ? 'spill will prioritize similar signals going forward'
+        : 'classification tuned',
+    })
+  }
+
   async function handleUpdateStatus(post, newStatus) {
     const prevStatus = post.post_status
     setPosts(p => p.map(x => x.id === post.id ? { ...x, post_status: newStatus } : x))
@@ -628,7 +649,7 @@ export default function FeedPage({ params }) {
       await api.updatePost(slug, post.id, { post_status: 'archived' })
       addToast({
         message: 'archived',
-        sub: 'removed from feed — find it in archived view',
+        sub: 'moved to ⊘ archived · spill did not learn from this',
         undoFn: () => {
           api.updatePost(slug, post.id, { post_status: prevStatus || 'unread' }).catch(() => {})
           fetchPosts()
@@ -646,7 +667,7 @@ export default function FeedPage({ params }) {
       await api.updatePost(slug, post.id, { post_status: 'dismissed' })
       addToast({
         message: 'dismissed',
-        sub: 'filtered from main feed',
+        sub: 'hidden from feed · use feedback to teach spill why',
         undoFn: () => {
           api.updatePost(slug, post.id, { post_status: prevStatus || 'unread' }).catch(() => {})
           fetchPosts()
@@ -1301,6 +1322,11 @@ export default function FeedPage({ params }) {
                       saved
                     </span>
                   )}
+                  {feedbackLoggedIds.has(post.id) && (
+                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 99, flexShrink: 0, color: '#60a5fa', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', fontFamily: 'var(--font-mono)' }}>
+                      ↑ learned
+                    </span>
+                  )}
                   {post.post_status && !['unread', 'archived', 'dismissed'].includes(post.post_status) && (
                     <span style={{
                       fontSize: 9, padding: '1px 6px', borderRadius: 99, flexShrink: 0,
@@ -1333,8 +1359,8 @@ export default function FeedPage({ params }) {
                   />
                 </div>
 
-                {/* Expanded AI reasoning panel */}
-                {isExpanded && (post.reasoning || post.response_template) && (
+                {/* Expanded panel — reasoning, notes, feedback */}
+                {isExpanded && (
                   <div style={{
                     padding: '10px 24px 12px',
                     background: '#0d0f1a',
@@ -1383,7 +1409,7 @@ export default function FeedPage({ params }) {
                       </div>
                     )}
                     <NoteEditor slug={slug} post={post} onSave={(notes) => setPosts(prev => prev.map(p => p.id === post.id ? { ...p, notes } : p))} />
-                    {feedbackPostId === post.id && (
+                    {feedbackPostId === post.id ? (
                       <FeedbackPanel
                         post={post}
                         slug={slug}
@@ -1392,9 +1418,24 @@ export default function FeedPage({ params }) {
                         onCategoryChange={(catId) => {
                           const cat = categories.find(c => c.id === catId)
                           setPosts(p => p.map(x => x.id === post.id ? { ...x, category_id: catId || null, category_name: cat?.name || null, category_color: cat?.color || null } : x))
-                          addToast({ message: 'feedback logged', sub: 'spill is learning from your correction' })
                         }}
+                        onFeedbackSubmit={(label) => handleFeedbackSubmit(post.id, label)}
                       />
+                    ) : (
+                      <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #1e2535' }}>
+                        <button
+                          onClick={() => setFeedbackPostId(post.id)}
+                          style={{
+                            fontSize: 11, color: '#334155', background: 'none',
+                            border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                            padding: 0, transition: 'color 0.12s',
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.color = '#64748b'}
+                          onMouseLeave={e => e.currentTarget.style.color = '#334155'}
+                        >
+                          give feedback — teach spill what matters
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
