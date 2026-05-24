@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 import { updateOrgIntelligence } from '../../../../../../server/feedback.js';
+import { ensureMigrations } from '../../../../../../server/migrate.js';
 
 // PATCH /api/orgs/[slug]/feedback/[id] — edit label and/or explanation
 export async function PATCH(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -53,6 +55,7 @@ export async function PATCH(request, { params }) {
 // DELETE /api/orgs/[slug]/feedback/[id] — remove a feedback signal
 export async function DELETE(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

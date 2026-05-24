@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '../../../server/db.js';
 import { getUser } from '../../../server/api-auth.js';
+import { ensureMigrations } from '../../../server/migrate.js';
 
 let _migrated = false;
 async function ensureColumns() {
@@ -13,6 +14,7 @@ async function ensureColumns() {
 // GET /api/orgs — list user's orgs
 export async function GET(request) {
   try {
+    await ensureMigrations();
     await ensureColumns();
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -34,6 +36,7 @@ export async function GET(request) {
 // POST /api/orgs — create org
 export async function POST(request) {
   try {
+    await ensureMigrations();
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../../server/api-auth.js';
 import { sendInviteEmail } from '../../../../../../../server/invite-email.js';
+import { ensureMigrations } from '../../../../../../../server/migrate.js';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://app-eight-theta-20.vercel.app';
 const EXPIRY_DAYS = 7;
@@ -9,6 +10,7 @@ const EXPIRY_DAYS = 7;
 // POST /api/orgs/[slug]/invitations/[id]/resend — extend + resend
 export async function POST(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

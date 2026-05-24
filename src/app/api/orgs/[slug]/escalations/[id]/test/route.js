@@ -3,6 +3,7 @@ import { query } from '../../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../../server/api-auth.js';
 import { sendEmail } from '../../../../../../../server/actions/emailer.js';
 import { sendSlack } from '../../../../../../../server/actions/slack.js';
+import { ensureMigrations } from '../../../../../../../server/migrate.js';
 
 const TEST_POST = {
   id: 'test-0',
@@ -22,6 +23,7 @@ const TEST_POST = {
 // POST /api/orgs/[slug]/escalations/[id]/test
 export async function POST(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

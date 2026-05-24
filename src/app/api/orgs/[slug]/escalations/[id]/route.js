@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 import { logActivity } from '../../../../../../server/activity.js';
+import { ensureMigrations } from '../../../../../../server/migrate.js';
 
 const VALID_ACTION_TYPES = ['email', 'webhook', 'sheets', 'slack'];
 
 // PATCH /api/orgs/[slug]/escalations/[id]
 export async function PATCH(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -66,6 +68,7 @@ export async function PATCH(request, { params }) {
 // DELETE /api/orgs/[slug]/escalations/[id]
 export async function DELETE(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

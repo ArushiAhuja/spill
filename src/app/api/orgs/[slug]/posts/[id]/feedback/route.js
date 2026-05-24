@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../../server/api-auth.js';
 import { updateOrgIntelligence } from '../../../../../../../server/feedback.js';
+import { ensureMigrations } from '../../../../../../../server/migrate.js';
 
 // GET /api/orgs/[slug]/posts/[id]/feedback — feedback history for a post
 export async function GET(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -30,6 +32,7 @@ export async function GET(request, { params }) {
 // POST /api/orgs/[slug]/posts/[id]/feedback — submit feedback
 export async function POST(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

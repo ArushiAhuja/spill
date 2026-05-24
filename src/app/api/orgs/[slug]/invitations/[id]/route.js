@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
+import { ensureMigrations } from '../../../../../../server/migrate.js';
 
 // DELETE /api/orgs/[slug]/invitations/[id] — revoke
 export async function DELETE(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

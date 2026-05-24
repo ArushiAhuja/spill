@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../../../../../server/db.js';
+import { ensureMigrations } from '../../../../../server/migrate.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'spill_dev_secret_change_in_prod';
 
@@ -18,6 +19,7 @@ function signToken(user) {
 // Existing user: { password }
 export async function POST(request, { params }) {
   try {
+    await ensureMigrations();
     const { token } = params;
     const body = await request.json();
 
