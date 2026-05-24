@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { query } from '../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../server/api-auth.js';
+import { ensureMigrations } from '../../../../../server/migrate.js';
 
 // GET /api/orgs/[slug]/posts — list posts with filters
 export async function GET(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });

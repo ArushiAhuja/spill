@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 import { logActivity } from '../../../../../../server/activity.js';
+import { ensureMigrations } from '../../../../../../server/migrate.js';
 
 // PATCH /api/orgs/[slug]/posts/[id] — mark reviewed
 export async function PATCH(request, { params }) {
   try {
+    await ensureMigrations();
     const { slug, id } = params;
     const user = getUser(request);
     if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
