@@ -1,0 +1,112 @@
+const BASE = '/api'
+
+function getToken() {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem('spill_token')
+}
+
+async function request(method, path, body) {
+  const token = getToken()
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+
+  if (res.status === 401) {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('spill_token')
+      window.location.href = '/login'
+    }
+    throw new Error('unauthorized')
+  }
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  return data
+}
+
+export const api = {
+  // Auth
+  signup: (body) => request('POST', '/auth/signup', body),
+  login: (body) => request('POST', '/auth/login', body),
+
+  // Orgs
+  getOrgs: () => request('GET', '/orgs'),
+  createOrg: (body) => request('POST', '/orgs', body),
+  getOrg: (slug) => request('GET', `/orgs/${slug}`),
+  updateOrg: (slug, body) => request('PATCH', `/orgs/${slug}`, body),
+
+  // Sources
+  getSources: (slug) => request('GET', `/orgs/${slug}/sources`),
+  updateSource: (slug, source, body) => request('PATCH', `/orgs/${slug}/sources/${source}`, body),
+
+  // Categories
+  getCategories: (slug) => request('GET', `/orgs/${slug}/categories`),
+  createCategory: (slug, body) => request('POST', `/orgs/${slug}/categories`, body),
+  updateCategory: (slug, id, body) => request('PATCH', `/orgs/${slug}/categories/${id}`, body),
+  deleteCategory: (slug, id) => request('DELETE', `/orgs/${slug}/categories/${id}`),
+
+  // Escalations
+  getEscalations: (slug) => request('GET', `/orgs/${slug}/escalations`),
+  createEscalation: (slug, body) => request('POST', `/orgs/${slug}/escalations`, body),
+  updateEscalation: (slug, id, body) => request('PATCH', `/orgs/${slug}/escalations/${id}`, body),
+  deleteEscalation: (slug, id) => request('DELETE', `/orgs/${slug}/escalations/${id}`),
+  testEscalation: (slug, id) => request('POST', `/orgs/${slug}/escalations/${id}/test`),
+
+  // Posts
+  getPosts: (slug, params = {}) => {
+    const qs = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(params).filter(([, v]) => v != null && v !== '')
+      )
+    ).toString()
+    return request('GET', `/orgs/${slug}/posts${qs ? `?${qs}` : ''}`)
+  },
+  updatePost: (slug, id, body) => request('PATCH', `/orgs/${slug}/posts/${id}`, body),
+  getStatus: (slug) => request('GET', `/orgs/${slug}/status`),
+  triggerRefresh: (slug) => request('POST', `/orgs/${slug}/refresh`),
+
+  // Incidents
+  getIncidents: (slug, status = 'open') => request('GET', `/orgs/${slug}/incidents?status=${status}`),
+  resolveIncident: (slug, id) => request('PATCH', `/orgs/${slug}/incidents/${id}`, { status: 'resolved' }),
+  patchIncident: (slug, id, body) => request('PATCH', `/orgs/${slug}/incidents/${id}`, body),
+
+  // Stats
+  getSentimentStats: (slug, days = 14) => request('GET', `/orgs/${slug}/stats?days=${days}`),
+  getStats: (slug, days) => request('GET', `/orgs/${slug}/stats?days=${days}`),
+
+  // Post notes
+  updatePostNotes: (slug, id, notes) => request('PATCH', `/orgs/${slug}/posts/${id}`, { notes }),
+
+  // Post feedback (AI classification correction + learning)
+  submitFeedback: (slug, id, body) => request('POST', `/orgs/${slug}/posts/${id}/feedback`, body),
+  getPostFeedback: (slug, id) => request('GET', `/orgs/${slug}/posts/${id}/feedback`),
+
+  // Org-level feedback history
+  getFeedback: (slug, params = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))).toString()
+    return request('GET', `/orgs/${slug}/feedback${qs ? `?${qs}` : ''}`)
+  },
+  updateFeedback: (slug, id, body) => request('PATCH', `/orgs/${slug}/feedback/${id}`, body),
+  deleteFeedback: (slug, id) => request('DELETE', `/orgs/${slug}/feedback/${id}`),
+
+  // Date range posts
+  getPostsInRange: (slug, from_date, to_date, params = {}) =>
+    request('GET', `/orgs/${slug}/posts?${new URLSearchParams({ from_date, to_date, limit: 200, ...params }).toString()}`),
+
+  // Digest test
+  testDigest: (slug) => request('POST', `/orgs/${slug}/digest/test`),
+
+  // Onboarding
+  onboard: (slug) => request('POST', `/orgs/${slug}/onboard`),
+
+  // Invitations
+  getInvitations: (slug) => request('GET', `/orgs/${slug}/invitations`),
+  createInvitation: (slug, body) => request('POST', `/orgs/${slug}/invitations`, body),
+  revokeInvitation: (slug, id) => request('DELETE', `/orgs/${slug}/invitations/${id}`),
+  resendInvitation: (slug, id) => request('POST', `/orgs/${slug}/invitations/${id}/resend`),
+}
