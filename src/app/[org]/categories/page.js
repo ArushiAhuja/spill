@@ -14,7 +14,7 @@ function SentimentSparkline({ trend, color }) {
 
   const pts = vals.map((v, i) => {
     const x = vals.length === 1 ? W / 2 : (i / (vals.length - 1)) * W
-    const y = H - (v / 20) * H
+    const y = H - (v / max) * H
     return `${x},${y}`
   }).join(' ')
 
@@ -36,7 +36,7 @@ function SentimentSparkline({ trend, color }) {
         {vals.length > 0 && (
           <circle
             cx={vals.length === 1 ? W / 2 : W}
-            cy={H - (vals[vals.length - 1] / 20) * H}
+            cy={H - (vals[vals.length - 1] / max) * H}
             r="2.5"
             fill={color || '#3b82f6'}
           />

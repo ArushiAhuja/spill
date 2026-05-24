@@ -51,7 +51,7 @@ export default function IncidentsPage({ params }) {
       await api.resolveIncident(slug, id)
       await load()
     } catch (err) {
-      setError(err.message)
+      setError(err.message || 'failed to resolve')
     }
   }
 
@@ -60,7 +60,7 @@ export default function IncidentsPage({ params }) {
       await api.patchIncident(slug, id, { status: 'open' })
       await load()
     } catch (err) {
-      setError(err.message)
+      setError(err.message || 'failed to reopen')
     }
   }
 

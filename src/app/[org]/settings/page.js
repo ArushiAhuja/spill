@@ -34,6 +34,16 @@ function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
     credentials: { ...(sourceData?.credentials || {}) },
   }))
 
+  useEffect(() => {
+    if (!saving) {
+      setLocalData({
+        enabled: sourceData?.enabled || false,
+        config: { ...(sourceData?.config || {}) },
+        credentials: { ...(sourceData?.credentials || {}) },
+      })
+    }
+  }, [sourceData, saving])
+
   const color = SOURCE_COLORS[sourceInfo.id] || '#64748b'
 
   async function handleToggle(val) {
@@ -717,6 +727,7 @@ export default function SettingsPage({ params }) {
 
   const [orgPartnerBrands, setOrgPartnerBrands] = useState('')
   const [incidentThreshold, setIncidentThreshold] = useState(5)
+  const [incidentSaveMsg, setIncidentSaveMsg] = useState('')
   const [sourceHealth, setSourceHealth] = useState([])
   const [digestTesting, setDigestTesting] = useState(false)
   const [digestTestMsg, setDigestTestMsg] = useState('')
@@ -1072,14 +1083,19 @@ export default function SettingsPage({ params }) {
               onClick={async () => {
                 try {
                   await api.updateOrg(slug, { incident_threshold: incidentThreshold })
-                  setOrgSaveMsg('saved')
-                  setTimeout(() => setOrgSaveMsg(''), 2000)
-                } catch (err) { setOrgSaveMsg(err.message || 'error') }
+                  setIncidentSaveMsg('saved')
+                  setTimeout(() => setIncidentSaveMsg(''), 2000)
+                } catch (err) { setIncidentSaveMsg(err.message || 'error') }
               }}
               style={{ fontSize: 12.5, padding: '8px 20px', background: '#3b82f6', color: '#0d0f1a', border: 'none', borderRadius: 8, fontFamily: 'inherit', fontWeight: 500, cursor: 'pointer' }}
             >
               save threshold
             </button>
+            {incidentSaveMsg && (
+              <span style={{ fontSize: 12, color: incidentSaveMsg === 'saved' ? '#4ade80' : '#f87171', marginLeft: 8 }}>
+                {incidentSaveMsg}
+              </span>
+            )}
           </div>
         </div>
       </section>

@@ -122,34 +122,21 @@ function Nav({ hasToken }) {
           onMouseLeave={e => e.currentTarget.style.color = '#64748b'}>
           pricing
         </Link>
-        {hasToken ? (
-          <Link href="/orgs" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#3b82f6', letterSpacing: '0.03em' }}>
-            dashboard →
-          </Link>
-        ) : (
-          <>
-            <Link href="/login" style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: '#64748b', letterSpacing: '0.01em', transition: 'color 0.12s' }}
-              onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
-              onMouseLeave={e => e.currentTarget.style.color = '#64748b'}>
-              login
-            </Link>
-            <Link href="/signup" style={{
-              fontFamily: 'var(--font-sans)', fontSize: 13, color: '#e2e8f0',
-              background: '#3b82f6', padding: '6px 16px', borderRadius: 8, fontWeight: 500,
-              transition: 'opacity 0.15s',
-            }}
-              onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
-              onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
-              get started →
-            </Link>
-          </>
-        )}
+        <Link href={hasToken ? '/orgs' : '/login'} style={{
+          fontFamily: 'var(--font-sans)', fontSize: 13, color: '#e2e8f0',
+          background: '#3b82f6', padding: '6px 16px', borderRadius: 8, fontWeight: 500,
+          transition: 'opacity 0.15s',
+        }}
+          onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
+          onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
+          {hasToken ? 'dashboard →' : 'get started →'}
+        </Link>
       </div>
     </nav>
   )
 }
 
-function HeroSection() {
+function HeroSection({ hasToken }) {
   const tickerRow = [...TICKER_ITEMS, ...TICKER_ITEMS]
 
   return (
@@ -240,7 +227,7 @@ function HeroSection() {
           justifyContent: 'center',
           flexWrap: 'wrap',
         }}>
-          <Link href="/signup" style={{
+          <Link href={hasToken ? '/orgs' : '/login'} style={{
             padding: '12px 24px',
             borderRadius: 10,
             fontSize: 14,
@@ -249,7 +236,7 @@ function HeroSection() {
             color: '#fff',
             display: 'inline-block',
           }}>
-            start watching →
+            {hasToken ? 'go to dashboard →' : 'start watching →'}
           </Link>
           <a href="#how" style={{
             padding: '12px 24px',
@@ -1045,7 +1032,7 @@ function EscalationDemo() {
   )
 }
 
-function FinalCTA() {
+function FinalCTA({ hasToken }) {
   return (
     <section style={{
       background: '#080a12',
@@ -1070,7 +1057,7 @@ function FinalCTA() {
           probably won&apos;t stay that way.
         </div>
         <div style={{ marginTop: 40 }}>
-          <Link href="/signup" style={{
+          <Link href={hasToken ? '/orgs' : '/login'} style={{
             display: 'inline-block',
             padding: '14px 32px',
             background: '#3b82f6',
@@ -1079,7 +1066,7 @@ function FinalCTA() {
             fontSize: 15,
             fontWeight: 500,
           }}>
-            start watching →
+            {hasToken ? 'go to dashboard →' : 'start watching →'}
           </Link>
         </div>
         <div style={{
@@ -1135,13 +1122,13 @@ export default function Home() {
   return (
     <div style={{ background: '#080a12' }}>
       <Nav hasToken={hasToken} />
-      <HeroSection />
+      <HeroSection hasToken={hasToken} />
       <HowSection />
       <DashboardPreview />
       <IntegrationsSection />
       <ForTeamsSection />
       <EscalationDemo />
-      <FinalCTA />
+      <FinalCTA hasToken={hasToken} />
       <Footer />
     </div>
   )

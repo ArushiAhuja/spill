@@ -181,7 +181,7 @@ export default function AnalyticsPage({ params }) {
 
       {/* Per-category breakdown */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {stats.sort((a, b) => {
+        {[...stats].sort((a, b) => {
           const aTotal = (a.trend || []).reduce((s, d) => s + d.count, 0)
           const bTotal = (b.trend || []).reduce((s, d) => s + d.count, 0)
           return bTotal - aTotal

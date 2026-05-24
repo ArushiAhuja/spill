@@ -153,6 +153,7 @@ export default function OnboardingPage() {
   // when step 4 loads, trigger the "all visible" after all categories animate in
   useEffect(() => {
     if (step === 4 && onboardResult?.categories) {
+      setAllVisible(false)
       const totalDelay = onboardResult.categories.length * 180 + 600
       const t = setTimeout(() => setAllVisible(true), totalDelay)
       return () => clearTimeout(t)
@@ -216,8 +217,11 @@ export default function OnboardingPage() {
 
     try {
       setLoadingMsg('connecting sources...')
+      const allSourceIds = SOURCES.filter(s => !s.disabled).map(s => s.id)
       await Promise.all(
-        Array.from(selectedSources).map(s => api.updateSource(slug, s, { enabled: true }))
+        allSourceIds.map(s =>
+          api.updateSource(slug, s, { enabled: selectedSources.has(s) })
+        )
       )
       setLoadingMsg('building your categories...')
       const result = await api.onboard(slug)

@@ -29,12 +29,20 @@ export default function AcceptInvitePage({ params }) {
 
   const [state, setState] = useState('loading') // loading | ready | expired | revoked | accepted | error
   const [invite, setInvite] = useState(null)
+  const [currentUserEmail, setCurrentUserEmail] = useState(null)
 
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    try {
+      const u = localStorage.getItem('spill_user')
+      if (u) setCurrentUserEmail(JSON.parse(u)?.email || null)
+    } catch { /* ignore */ }
+  }, [])
 
   useEffect(() => {
     async function verify() {
@@ -88,7 +96,7 @@ export default function AcceptInvitePage({ params }) {
       }
       setToken(data.token)
       setUser(data.user)
-      router.replace(`/${data.org.slug}`)
+      router.replace('/orgs')
     } catch {
       setError('something went wrong — please try again')
     } finally {
@@ -210,6 +218,16 @@ export default function AcceptInvitePage({ params }) {
 
         {state === 'ready' && invite && (
           <>
+            {currentUserEmail && currentUserEmail !== invite.email && (
+              <div style={{
+                width: '100%', marginBottom: 20, padding: '10px 14px',
+                background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)',
+                borderRadius: 8, fontSize: 12, color: '#fbbf24', lineHeight: 1.6,
+              }}>
+                you're logged in as <strong>{currentUserEmail}</strong>. accepting this invite will switch your session to <strong>{invite.email}</strong>.
+              </div>
+            )}
+
             <div style={{ textAlign: 'center', marginBottom: 32, width: '100%' }}>
               <div style={{ fontSize: 13, color: '#475569', marginBottom: 6 }}>
                 {invite.inviter?.name || invite.inviter?.email || 'someone'} invited you to

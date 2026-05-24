@@ -26,7 +26,7 @@ const PLANS = [
     tagline: 'kick the tires.',
     desc: 'for demos, founders, and exploration.',
     cta: 'try spill',
-    ctaHref: '/signup',
+    ctaHref: '/login',
     ctaStyle: 'outline',
     badge: null,
     features: [
@@ -48,7 +48,7 @@ const PLANS = [
     tagline: 'your first internet ops room.',
     desc: 'for startups and lean ops teams.',
     cta: 'start watching',
-    ctaHref: '/signup',
+    ctaHref: '/login',
     ctaStyle: 'outline',
     badge: 'popular for startups',
     features: [
@@ -70,7 +70,7 @@ const PLANS = [
     tagline: 'where ops gets serious.',
     desc: 'for cx + ops teams at consumer companies.',
     cta: 'build your ops room',
-    ctaHref: '/signup',
+    ctaHref: '/login',
     ctaStyle: 'primary',
     badge: 'core spill tier',
     features: [
@@ -200,28 +200,15 @@ function Nav({ hasToken }) {
         <Link href="/pricing" style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: '#e2e8f0', letterSpacing: '0.01em' }}>
           pricing
         </Link>
-        {hasToken ? (
-          <Link href="/orgs" style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#3b82f6' }}>
-            dashboard →
-          </Link>
-        ) : (
-          <>
-            <Link href="/login" style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: '#64748b', transition: 'color 0.12s' }}
-              onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
-              onMouseLeave={e => e.currentTarget.style.color = '#64748b'}>
-              login
-            </Link>
-            <Link href="/signup" style={{
-              fontFamily: 'var(--font-sans)', fontSize: 13, color: '#e2e8f0',
-              background: '#3b82f6', padding: '6px 16px', borderRadius: 8, fontWeight: 500,
-              transition: 'opacity 0.15s',
-            }}
-              onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
-              onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
-              get started →
-            </Link>
-          </>
-        )}
+        <Link href={hasToken ? '/orgs' : '/login'} style={{
+          fontFamily: 'var(--font-sans)', fontSize: 13, color: '#e2e8f0',
+          background: '#3b82f6', padding: '6px 16px', borderRadius: 8, fontWeight: 500,
+          transition: 'opacity 0.15s',
+        }}
+          onMouseEnter={e => e.currentTarget.style.opacity = '0.88'}
+          onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
+          {hasToken ? 'dashboard →' : 'get started →'}
+        </Link>
       </div>
     </nav>
   )
@@ -786,7 +773,7 @@ export default function PricingPage() {
             probably won&apos;t stay that way.
           </div>
           <div style={{ marginTop: 36, display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-            <Link href="/signup" style={{
+            <Link href="/login" style={{
               display: 'inline-block', padding: '13px 28px',
               background: '#3b82f6', color: '#fff', borderRadius: 10,
               fontSize: 14, fontWeight: 500, transition: 'opacity 0.15s',

@@ -77,7 +77,7 @@ export const api = {
 
   // Stats
   getSentimentStats: (slug, days = 14) => request('GET', `/orgs/${slug}/stats?days=${days}`),
-  getStats: (slug, days) => request('GET', `/orgs/${slug}/stats?days=${days}`),
+  getStats: (slug, days = 14) => request('GET', `/orgs/${slug}/stats?days=${days}`),
 
   // Post notes
   updatePostNotes: (slug, id, notes) => request('PATCH', `/orgs/${slug}/posts/${id}`, { notes }),
