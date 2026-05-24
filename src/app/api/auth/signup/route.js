@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../../../../server/db.js';
+import { sendWelcomeEmail } from '../../../../server/welcome-email.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'spill_dev_secret_change_in_prod';
 
@@ -44,6 +45,12 @@ export async function POST(request) {
     }
 
     const user = rows[0];
+
+    // Fire-and-forget — a missing Gmail config must never block account creation
+    sendWelcomeEmail({ to: user.email, name: user.name }).catch((err) =>
+      console.error('[welcome-email] failed:', err.message)
+    );
+
     const token = signToken(user);
     return NextResponse.json(
       { token, user: { id: user.id, email: user.email, name: user.name } },
