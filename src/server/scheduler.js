@@ -352,6 +352,10 @@ export async function runOrgCycle(orgId) {
         'UPDATE refresh_logs SET status=$1, completed_at=NOW(), posts_fetched=0 WHERE id=$2',
         ['completed', logId]
       );
+      await query(
+        `UPDATE source_configs SET last_fetch_at = NOW(), last_fetch_error = NULL WHERE org_id = $1 AND enabled = true`,
+        [orgId]
+      ).catch(() => {});
       return;
     }
 
