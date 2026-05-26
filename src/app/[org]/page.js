@@ -546,15 +546,10 @@ export default function FeedPage({ params }) {
     }
   }, [slug, fetchStatus])
 
-  // While sources are stale, keep polling status every 30 s so the warning clears automatically
+  // While a source has an error, keep polling status every 30 s so the warning clears once fixed
   useEffect(() => {
-    const sourceHealth = status?.sourceHealth || []
-    const isStale = sourceHealth.some(s => {
-      if (s.error) return true
-      if (!s.lastFetchAt) return false
-      return (Date.now() - new Date(s.lastFetchAt).getTime()) > 30 * 60 * 1000
-    })
-    if (!isStale) return
+    const hasError = (status?.sourceHealth || []).some(s => s.error)
+    if (!hasError) return
     const timer = setInterval(fetchStatus, 30_000)
     return () => clearInterval(timer)
   }, [status, fetchStatus])
@@ -801,11 +796,9 @@ export default function FeedPage({ params }) {
 
   const sourceBreakdown = status?.sourceBreakdown || {}
   const sourceHealth = status?.sourceHealth || []
-  const staleSources = sourceHealth.filter(s => {
-    if (s.error) return true
-    if (!s.lastFetchAt) return false
-    return (Date.now() - new Date(s.lastFetchAt).getTime()) > 30 * 60 * 1000 // 30 min stale
-  })
+  // Only flag sources with actual fetch errors — time-based staleness is not shown
+  // because page-load auto-refresh keeps data current for active sessions.
+  const staleSources = sourceHealth.filter(s => s.error)
   const totalEscalated = status?.totalEscalated ?? 0
 
   const filterPillBase = {
