@@ -445,7 +445,7 @@ export async function runOrgCycle(orgId) {
       ).catch(() => {});
     }
     await query(
-      `UPDATE source_configs SET last_fetch_error = $1 WHERE org_id = $2 AND enabled = true`,
+      `UPDATE source_configs SET last_fetch_at = NOW(), last_fetch_error = $1 WHERE org_id = $2 AND enabled = true`,
       [err.message.slice(0, 200), orgId]
     ).catch(() => {})
   }

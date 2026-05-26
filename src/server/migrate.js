@@ -123,10 +123,6 @@ export async function ensureMigrations() {
   await query(`CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_invitations_org ON invitations(org_id, status)`);
 
-  // Phase 4: feedback learning loop — label + explanation columns
-  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS label TEXT`);
-  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS explanation TEXT`);
-
   // Phase 3: AI classification feedback
   await query(`
     CREATE TABLE IF NOT EXISTS post_feedback (
@@ -139,6 +135,10 @@ export async function ensureMigrations() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+
+  // Phase 4: feedback learning loop — label + explanation columns
+  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS label TEXT`);
+  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS explanation TEXT`);
 
   // Phase 10: enterprise ops
   // Activity / audit log

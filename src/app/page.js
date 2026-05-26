@@ -122,7 +122,7 @@ function Nav({ hasToken }) {
           onMouseLeave={e => e.currentTarget.style.color = '#64748b'}>
           pricing
         </Link>
-        <Link href={hasToken ? '/orgs' : '/login'} style={{
+        <Link href="/login" style={{
           fontFamily: 'var(--font-sans)', fontSize: 13, color: '#e2e8f0',
           background: '#3b82f6', padding: '6px 16px', borderRadius: 8, fontWeight: 500,
           transition: 'opacity 0.15s',
@@ -227,7 +227,7 @@ function HeroSection({ hasToken }) {
           justifyContent: 'center',
           flexWrap: 'wrap',
         }}>
-          <Link href={hasToken ? '/orgs' : '/login'} style={{
+          <Link href="/login" style={{
             padding: '12px 24px',
             borderRadius: 10,
             fontSize: 14,
@@ -236,7 +236,7 @@ function HeroSection({ hasToken }) {
             color: '#fff',
             display: 'inline-block',
           }}>
-            {hasToken ? 'go to dashboard →' : 'start watching →'}
+            start watching →
           </Link>
           <a href="#how" style={{
             padding: '12px 24px',
@@ -1057,7 +1057,7 @@ function FinalCTA({ hasToken }) {
           probably won&apos;t stay that way.
         </div>
         <div style={{ marginTop: 40 }}>
-          <Link href={hasToken ? '/orgs' : '/login'} style={{
+          <Link href="/login" style={{
             display: 'inline-block',
             padding: '14px 32px',
             background: '#3b82f6',
@@ -1066,7 +1066,7 @@ function FinalCTA({ hasToken }) {
             fontSize: 15,
             fontWeight: 500,
           }}>
-            {hasToken ? 'go to dashboard →' : 'start watching →'}
+            start watching →
           </Link>
         </div>
         <div style={{

@@ -528,8 +528,7 @@ export default function FeedPage({ params }) {
     setSelectedIds(new Set())
   }, [filterSource, filterCategory, viewTab, search, fromDate, toDate, page])
 
-  // Auto-refresh on page load if data is stale — mirrors original Express scheduler
-  // which called runOrgCycle immediately on startup, no cron needed.
+  // Auto-refresh on page load if data is stale — then poll status until warning clears.
   useEffect(() => {
     const key = `spill:lastRefresh:${slug}`
     const last = parseInt(sessionStorage.getItem(key) || '0', 10)
@@ -537,8 +536,28 @@ export default function FeedPage({ params }) {
     if (Date.now() - last > staleMs) {
       sessionStorage.setItem(key, String(Date.now()))
       api.triggerRefresh(slug).catch(() => {})
+      // Poll status every 15 s (up to 3 min) so stale warning clears once refresh completes
+      let polls = 0
+      const timer = setInterval(() => {
+        fetchStatus()
+        if (++polls >= 12) clearInterval(timer)
+      }, 15_000)
+      return () => clearInterval(timer)
     }
-  }, [slug])
+  }, [slug, fetchStatus])
+
+  // While sources are stale, keep polling status every 30 s so the warning clears automatically
+  useEffect(() => {
+    const sourceHealth = status?.sourceHealth || []
+    const isStale = sourceHealth.some(s => {
+      if (s.error) return true
+      if (!s.lastFetchAt) return false
+      return (Date.now() - new Date(s.lastFetchAt).getTime()) > 30 * 60 * 1000
+    })
+    if (!isStale) return
+    const timer = setInterval(fetchStatus, 30_000)
+    return () => clearInterval(timer)
+  }, [status, fetchStatus])
 
   async function handleRefresh() {
     setRefreshing(true)

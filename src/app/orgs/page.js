@@ -22,11 +22,7 @@ export default function OrgsPage() {
           router.replace(`/${orgs[0].slug}`)
         }
       } catch (err) {
-        if (err.message === 'unauthorized') {
-          router.replace('/login')
-        } else {
-          router.replace('/onboarding')
-        }
+        router.replace('/login')
       }
     }
 

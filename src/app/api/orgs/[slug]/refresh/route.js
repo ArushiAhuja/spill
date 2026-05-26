@@ -3,7 +3,7 @@ import { waitUntil } from '@vercel/functions';
 import { getUser, getOrgAccess } from '../../../../../server/api-auth.js';
 import { refreshOrg } from '../../../../../server/scheduler.js';
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // POST /api/orgs/[slug]/refresh — trigger manual refresh
 export async function POST(request, { params }) {
