@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import { query } from '../../../../../../server/db.js';
+
+export const maxDuration = 60;
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 import { logActivity } from '../../../../../../server/activity.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
@@ -136,10 +139,14 @@ export async function PATCH(request, { params }) {
     if (saved === true)                 logActivity({ ...logBase, action: 'saved' }).catch(() => {});
     if (snoozed_until)                  logActivity({ ...logBase, action: 'snoozed', meta: { until: snoozed_until } }).catch(() => {});
 
-    // Fire escalation rules immediately when user manually escalates a post
+    // Fire escalation rules immediately when user manually escalates a post.
+    // waitUntil keeps the function alive after response is sent — without it
+    // Vercel kills the invocation before the async email/slack work completes.
     if (manually_escalated === true) {
-      fireRulesForPost(updated, access.orgId).catch(err =>
-        console.error('[manual escalate] rules failed:', err.message)
+      waitUntil(
+        fireRulesForPost(updated, access.orgId).catch(err =>
+          console.error('[manual escalate] rules failed:', err.message)
+        )
       );
     }
 
