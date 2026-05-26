@@ -242,6 +242,8 @@ export async function runOrgCycle(orgId) {
     }
 
     const rawPosts = await fetchAll(orgConfig);
+    const bySource = rawPosts.reduce((acc, p) => { acc[p.source] = (acc[p.source] || 0) + 1; return acc; }, {});
+    console.log(`[org ${orgId}] fetched ${rawPosts.length} raw posts:`, JSON.stringify(bySource));
 
     // Build set of explicitly configured subreddits + context_queries for AI filter context
     const redditCfg = orgConfig.sources?.reddit?.config || {};
@@ -250,6 +252,7 @@ export async function runOrgCycle(orgId) {
       ...(redditCfg.auto_subreddits || []),
     ].map(s => s.toLowerCase()));
     const contextQueries = Array.isArray(redditCfg.context_queries) ? redditCfg.context_queries : [];
+    const redditQueries = Array.isArray(redditCfg.queries) ? redditCfg.queries.filter(q => q && q.length >= 3) : [];
 
     function postSubreddit(p) {
       const m = p.url?.match(/reddit\.com\/r\/([^/?#]+)/i);
@@ -285,6 +288,8 @@ export async function runOrgCycle(orgId) {
       if (competitors.length && detectCompetitor(lower, competitors)) return true;
       // Industry monitoring keywords
       if (industryOn && industryKws.length > 0 && industryKws.some(kw => lower.includes(kw))) return true;
+      // User-configured Reddit search queries (e.g. "MMT", "make my trip") — explicit user intent
+      if (redditQueries.some(q => lower.includes(q.toLowerCase()))) return true;
       return false;
     }
 
