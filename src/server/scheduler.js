@@ -288,8 +288,10 @@ export async function runOrgCycle(orgId) {
       if (competitors.length && detectCompetitor(lower, competitors)) return true;
       // Industry monitoring keywords
       if (industryOn && industryKws.length > 0 && industryKws.some(kw => lower.includes(kw))) return true;
-      // User-configured Reddit search queries (e.g. "MMT", "make my trip") — explicit user intent
-      if (redditQueries.some(q => lower.includes(q.toLowerCase()))) return true;
+      // User-configured Reddit search queries + context queries (e.g. "MMT booking", "make my trip", "MMT")
+      // Use word boundaries to avoid substring false positives ("MMT" matching "commitment")
+      const allRedditTerms = [...new Set([...redditQueries, ...contextQueries.filter(q => q && q.length >= 3)])];
+      if (allRedditTerms.some(q => new RegExp(`\\b${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}\\b`, 'i').test(text))) return true;
       return false;
     }
 
