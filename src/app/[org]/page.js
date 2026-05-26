@@ -701,7 +701,7 @@ export default function FeedPage({ params }) {
       await api.updatePost(slug, post.id, { manually_escalated: willEscalate, post_status: willEscalate ? 'acknowledged' : prev.post_status })
       addToast({
         message: willEscalate ? 'manually escalated' : 'escalation removed',
-        sub: willEscalate ? 'escalation rules will fire for this post' : null,
+        sub: willEscalate ? 'notifications sent to your escalation rules' : null,
         undoFn: () => {
           setPosts(p => p.map(x => x.id === post.id ? { ...x, ...prev } : x))
           api.updatePost(slug, post.id, prev).catch(() => {})

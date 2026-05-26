@@ -3,6 +3,55 @@ import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 import { logActivity } from '../../../../../../server/activity.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
+import { sendEmail } from '../../../../../../server/actions/emailer.js';
+import { sendSlack } from '../../../../../../server/actions/slack.js';
+
+function isInMuteWindow(muteWindows) {
+  if (!muteWindows?.length) return false;
+  const now = new Date();
+  const hhmm = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+  return muteWindows.some(w => {
+    if (!w.start || !w.end) return false;
+    if (w.start <= w.end) return hhmm >= w.start && hhmm < w.end;
+    return hhmm >= w.start || hhmm < w.end;
+  });
+}
+
+async function fireRulesForPost(post, orgId) {
+  const { rows: rules } = await query(
+    'SELECT * FROM escalation_rules WHERE org_id = $1 AND enabled = true',
+    [orgId]
+  );
+  if (!rules.length) return;
+
+  const { rows: categories } = await query(
+    'SELECT id, name FROM categories WHERE org_id = $1',
+    [orgId]
+  );
+
+  for (const rule of rules) {
+    const categoryMatch = rule.category_ids.length === 0 || rule.category_ids.includes(post.category_id);
+    if (!categoryMatch) continue;
+    if (isInMuteWindow(rule.mute_windows)) continue;
+
+    const category = categories.find(c => c.id === post.category_id);
+    try {
+      if (rule.action_type === 'email') {
+        const emailRecipients = rule.config.emails?.length
+          ? rule.config.emails
+          : rule.config.to?.trim().split(/[\s,]+/).filter(Boolean);
+        if (emailRecipients?.length) {
+          await sendEmail(post, category, { ...rule.config, emails: emailRecipients });
+        }
+      } else if (rule.action_type === 'slack') {
+        const webhookUrl = rule.config.webhook_url || rule.config.slack_webhook_url;
+        if (webhookUrl) await sendSlack(post, category, rule.config);
+      }
+    } catch (err) {
+      console.error(`[manual escalate] rule ${rule.id} failed:`, err.message);
+    }
+  }
+}
 
 // PATCH /api/orgs/[slug]/posts/[id] — mark reviewed
 export async function PATCH(request, { params }) {
@@ -86,6 +135,13 @@ export async function PATCH(request, { params }) {
     if (manually_escalated === true)    logActivity({ ...logBase, action: 'escalated' }).catch(() => {});
     if (saved === true)                 logActivity({ ...logBase, action: 'saved' }).catch(() => {});
     if (snoozed_until)                  logActivity({ ...logBase, action: 'snoozed', meta: { until: snoozed_until } }).catch(() => {});
+
+    // Fire escalation rules immediately when user manually escalates a post
+    if (manually_escalated === true) {
+      fireRulesForPost(updated, access.orgId).catch(err =>
+        console.error('[manual escalate] rules failed:', err.message)
+      );
+    }
 
     return NextResponse.json(updated);
   } catch (err) {
