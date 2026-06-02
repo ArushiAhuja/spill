@@ -1,11 +1,28 @@
 import { query } from './db.js';
 
-// Version-stamp: bump this when adding new migration steps so warm instances re-run
+// Bump when adding new migration steps. Cold starts check ONE DB query instead of
+// replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
 const MIGRATION_VERSION = 11;
-let _appliedVersion = 0;
 
 export async function ensureMigrations() {
-  if (_appliedVersion >= MIGRATION_VERSION) return;
+  // Fast path: check DB-persisted version. Creates app_settings on first ever run.
+  // If the table doesn't exist yet this query throws → fall through to full migration.
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    const { rows } = await query(
+      `SELECT value FROM app_settings WHERE key = 'migration_version'`
+    );
+    const dbVersion = parseInt(rows[0]?.value || '0', 10);
+    if (dbVersion >= MIGRATION_VERSION) return;
+  } catch {
+    // If the check itself fails, proceed and attempt the full migration.
+  }
 
   // posts extensions — created_at tracks DB insertion time for incident detection
   await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
@@ -29,8 +46,6 @@ export async function ensureMigrations() {
   await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS industry_monitoring BOOLEAN DEFAULT false`);
   await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS industry_keywords TEXT[] DEFAULT '{}'`);
   await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS intel_profile JSONB`);
-
-  // organizations website field (may have been added after initial schema)
   await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS website TEXT`);
 
   // incidents
@@ -47,7 +62,6 @@ export async function ensureMigrations() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  // Backfill created_at if incidents table was created before this column was added
   await query(`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
 
   await query(`
@@ -58,7 +72,6 @@ export async function ensureMigrations() {
     )
   `);
 
-  // email-thread feedback loop
   await query(`
     CREATE TABLE IF NOT EXISTS response_threads (
       id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -125,7 +138,7 @@ export async function ensureMigrations() {
   await query(`CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_invitations_org ON invitations(org_id, status)`);
 
-  // Phase 3: AI classification feedback
+  // AI classification feedback
   await query(`
     CREATE TABLE IF NOT EXISTS post_feedback (
       id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -137,12 +150,9 @@ export async function ensureMigrations() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-
-  // Phase 4: feedback learning loop — label + explanation columns
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS label TEXT`);
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS explanation TEXT`);
 
-  // Phase 10: enterprise ops
   // Activity / audit log
   await query(`
     CREATE TABLE IF NOT EXISTS activity_log (
@@ -166,5 +176,10 @@ export async function ensureMigrations() {
   // Escalation rule mute windows (stored as JSONB array)
   await query(`ALTER TABLE escalation_rules ADD COLUMN IF NOT EXISTS mute_windows JSONB DEFAULT '[]'`);
 
-  _appliedVersion = MIGRATION_VERSION;
+  // Persist completed version to DB so future cold starts skip all 55 queries
+  await query(`
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ('migration_version', $1, NOW())
+    ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
+  `, [String(MIGRATION_VERSION)]);
 }

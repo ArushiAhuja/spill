@@ -4,6 +4,8 @@ import { query } from '../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../server/migrate.js';
 
+export const maxDuration = 60;
+
 let _openai = null;
 function getOpenAI() {
   if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });

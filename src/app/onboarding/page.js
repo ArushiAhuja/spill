@@ -169,10 +169,41 @@ export default function OnboardingPage() {
     })
   }
 
+  // Separated so a retry after onboard timeout skips org creation (org already exists)
+  async function runOnboard(slug) {
+    setError('')
+    setLoading(true)
+    setLoadingMsg('connecting sources...')
+    try {
+      const allSourceIds = SOURCES.filter(s => !s.disabled).map(s => s.id)
+      await Promise.all(
+        allSourceIds.map(s =>
+          api.updateSource(slug, s, { enabled: selectedSources.has(s) })
+        )
+      )
+      setLoadingMsg('building your categories...')
+      const result = await api.onboard(slug)
+      setOnboardResult(result)
+      setStep(4)
+    } catch (err) {
+      // Org was already created — show a retry that goes straight to the onboard step
+      setError((err.message || 'something went wrong') + ' — tap retry to try again.')
+    } finally {
+      setLoading(false)
+      setLoadingMsg('setting up your workspace...')
+    }
+  }
+
   async function handleGenerate() {
     setError('')
     setLoading(true)
     setAllVisible(false)
+
+    // If org was already created in a previous failed attempt, skip straight to onboard
+    if (createdSlug) {
+      await runOnboard(createdSlug)
+      return
+    }
 
     const competitorsList = formData.competitors
       ? formData.competitors.split(',').map(s => s.trim()).filter(Boolean)
@@ -200,7 +231,7 @@ export default function OnboardingPage() {
         const msg = (err.message || '').toLowerCase()
         const isConflict = msg.includes('already') || msg.includes('unique') || msg.includes('exist') || msg.includes('duplicate')
         if (!isConflict || attempt === 3) {
-          setError('something went wrong. please try again.')
+          setError('could not create workspace. please try again.')
           setLoading(false)
           return
         }
@@ -213,26 +244,10 @@ export default function OnboardingPage() {
       return
     }
 
+    // Persist slug before calling onboard — if onboard fails, retry reuses this slug
     setCreatedSlug(slug)
-
-    try {
-      setLoadingMsg('connecting sources...')
-      const allSourceIds = SOURCES.filter(s => !s.disabled).map(s => s.id)
-      await Promise.all(
-        allSourceIds.map(s =>
-          api.updateSource(slug, s, { enabled: selectedSources.has(s) })
-        )
-      )
-      setLoadingMsg('building your categories...')
-      const result = await api.onboard(slug)
-      setOnboardResult(result)
-      setStep(4)
-    } catch (err) {
-      setError(err.message || 'something went wrong. please try again.')
-    } finally {
-      setLoading(false)
-      setLoadingMsg('setting up your workspace...')
-    }
+    setLoading(false)
+    await runOnboard(slug)
   }
 
   const container = {
