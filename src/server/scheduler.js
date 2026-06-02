@@ -34,9 +34,15 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
   for (let i = 0; i < posts.length; i += BATCH) {
     const batch = posts.slice(i, i + BATCH);
     const postList = batch.map((p, idx) => {
-      const sr = p.url?.match(/reddit\.com\/r\/([^/?#]+)/i)?.[1] || '';
+      let sourceLabel;
+      if (p.source === 'reddit') {
+        const sr = p.url?.match(/reddit\.com\/r\/([^/?#]+)/i)?.[1] || 'reddit';
+        sourceLabel = `r/${sr}`;
+      } else {
+        sourceLabel = p.source || 'web';
+      }
       const text = `${p.title || ''}${p.body ? ': ' + p.body.slice(0, 100) : ''}`.trim();
-      return `[${idx}] r/${sr} — ${text}`;
+      return `[${idx}] [${sourceLabel}] — ${text}`;
     }).join('\n');
 
     try {
@@ -55,19 +61,21 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
 Description: ${orgDescription || orgName}
 ${operationalContext}
 ${feedbackContext ? `\nLearned exclusions from past feedback:\n${feedbackContext}\n` : ''}
-For each post, ask: would this conversation MATTER to this company — operationally, reputationally, competitively, or commercially?
+Posts below come from Reddit, Hacker News, Google News, Twitter, and app store reviews. Some matched keyword filters but may not be genuinely about this company. Your job is to verify each one actually matters.
 
-Include a post if it discusses:
-- Customer pain, complaints, or frustrations relevant to this company's industry
-- Operational failures (refunds, service quality, safety, delays) relevant to this type of company
-- Industry events, regulations, or competitor news that would concern this company's leadership
-- Purchasing intent, reviews, or comparisons in this company's space
+Include a post ONLY if it:
+- Directly mentions or is clearly about this company, its products, or its services
+- Discusses customer pain, complaints, or frustrations about this company specifically
+- Covers operational failures (refunds, service quality, safety, delays) involving this company
+- Reports industry events, regulations, or competitor moves that would concern this company's leadership
+- Contains purchasing intent, reviews, or comparisons that involve this company
 
 Exclude if:
-- It's about a completely different industry
-- It's a different country/geography with no connection to this company
-- It's generic life/personal content with no commercial/operational relevance
-- The overlap is coincidental (same word, different context)
+- The company name appears only incidentally or in an unrelated context
+- It's about a different company or industry with no connection
+- It's generic content that happens to share a keyword (same word, different meaning)
+- It's a different country/geography with no operational relevance to this company
+- It's personal/lifestyle content with no commercial signal
 
 Posts:
 ${postList}
@@ -323,7 +331,7 @@ export async function runOrgCycle(orgId) {
     });
     const tier2Ids = new Set(tier2.map(p => p.id));
 
-    // Tier 3: posts from configured subreddits that passed neither tier1 nor tier2 → AI filter
+    // Tier 3: remaining posts from configured subreddits
     const tier3Candidates = brand
       ? rawPosts.filter(p => {
           if (tier1Ids.has(p.id) || tier2Ids.has(p.id)) return false;
@@ -332,14 +340,15 @@ export async function runOrgCycle(orgId) {
         })
       : [];
 
-    const tier3 = tier3Candidates.length > 0
-      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext)
+    // AI-gate: ALL keyword-matched posts + subreddit candidates pass through AI relevance.
+    // Keyword matching narrows candidates but doesn't guarantee relevance — AI validates every post.
+    const aiCandidates = [...tier1, ...tier2, ...tier3Candidates];
+    const brandFiltered = aiCandidates.length > 0
+      ? await aiRelevanceFilter(aiCandidates, org.name, org.description, contextQueries, intel, feedbackContext)
       : [];
 
-    const brandFiltered = [...tier1, ...tier2, ...tier3];
-
     if (rawPosts.length !== brandFiltered.length) {
-      console.log(`[org ${orgId}] relevance: t1=${tier1.length} t2=${tier2.length} t3=${tier3.length} dropped=${rawPosts.length - brandFiltered.length}`);
+      console.log(`[org ${orgId}] relevance: candidates=${aiCandidates.length} passed=${brandFiltered.length} dropped=${rawPosts.length - brandFiltered.length}`);
     }
 
     // Dedupe
