@@ -30,7 +30,7 @@ export async function POST(request, { params }) {
     if (!inv) return NextResponse.json({ error: 'invitation not found' }, { status: 404 });
 
     const { rows: [org] } = await query(
-      'SELECT name, digest_gmail_user, digest_gmail_app_password FROM organizations WHERE id = $1',
+      'SELECT name FROM organizations WHERE id = $1',
       [access.orgId]
     );
 
@@ -42,10 +42,6 @@ export async function POST(request, { params }) {
         inviterName: user.name || user.email,
         orgName: org.name,
         acceptUrl,
-        orgConfig: {
-          digest_gmail_user: org.digest_gmail_user,
-          digest_gmail_app_password: org.digest_gmail_app_password,
-        },
       });
     } catch (emailErr) {
       return NextResponse.json({

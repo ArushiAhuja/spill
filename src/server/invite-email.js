@@ -1,13 +1,4 @@
-import nodemailer from 'nodemailer';
-
-function makeTransporter(user, pass) {
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: { user, pass },
-  });
-}
+import { sendEmail } from './agentmail.js';
 
 function buildHtml({ inviterName, orgName, acceptUrl }) {
   return `<!DOCTYPE html>
@@ -87,32 +78,13 @@ function buildText({ inviterName, orgName, acceptUrl }) {
   ].join('\n');
 }
 
-// Resolves a transporter: per-org digest credentials → global env → throws
-export async function getInviteTransporter(orgConfig = {}) {
-  const user = orgConfig.digest_gmail_user?.trim() || process.env.GMAIL_USER;
-  const pass = orgConfig.digest_gmail_app_password?.trim() || process.env.GMAIL_APP_PASSWORD;
-  if (!user || !pass) {
-    throw new Error('no email sender configured — add GMAIL_USER + GMAIL_APP_PASSWORD to your environment, or configure digest email in settings');
-  }
-  return { transporter: makeTransporter(user, pass), from: user };
-}
-
-export async function sendInviteEmail({ to, inviterName, orgName, acceptUrl, orgConfig = {} }) {
-  if (process.env.DRY_RUN === 'true') {
-    console.log(`[invite-email] DRY RUN — would send to ${to}`);
-    console.log(`  invite: ${acceptUrl}`);
-    return;
-  }
-
-  const { transporter, from } = await getInviteTransporter(orgConfig);
-
-  await transporter.sendMail({
-    from: `"spill" <${from}>`,
+export async function sendInviteEmail({ to, inviterName, orgName, acceptUrl }) {
+  await sendEmail({
     to,
     subject: `you've been invited to spill`,
-    text: buildText({ inviterName, orgName, acceptUrl }),
     html: buildHtml({ inviterName, orgName, acceptUrl }),
+    text: buildText({ inviterName, orgName, acceptUrl }),
+    labels: ['invite'],
   });
-
   console.log(`[invite-email] sent to ${to}`);
 }

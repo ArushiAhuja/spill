@@ -1,5 +1,5 @@
 import { query } from '../db.js';
-import nodemailer from 'nodemailer';
+import { sendEmail } from '../agentmail.js';
 
 const SPIKE_MULTIPLIER = 2.5;
 
@@ -47,18 +47,8 @@ async function notifyAnomaly(orgId, count, avg, ratio) {
       : rule.config.to?.trim().split(/[\s,]+/).filter(Boolean);
     if (!recipients?.length) return;
 
-    const gmailUser = rule.config.gmail_user?.trim() || process.env.GMAIL_USER;
-    const gmailPass = rule.config.gmail_app_password?.trim() || process.env.GMAIL_APP_PASSWORD;
-    if (!gmailUser || !gmailPass) return;
-
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com', port: 465, secure: true,
-      auth: { user: gmailUser, pass: gmailPass },
-    });
-
-    await transporter.sendMail({
-      from: `"Spill Social Watch" <${gmailUser}>`,
-      to: recipients.join(', '),
+    await sendEmail({
+      to: recipients,
       subject: `[SPILL ⚡ SPIKE] ${org?.name} — ${count} new signals (${ratio}x above normal)`,
       text: [
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
@@ -74,8 +64,9 @@ async function notifyAnomaly(orgId, count, avg, ratio) {
         'Log in to Spill to review: https://getspill.vercel.app',
         '',
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-        'Sent by Spill Social Watch (automated)',
+        'Sent by Spill (automated)',
       ].join('\n'),
+      labels: ['spike-alert'],
     });
 
     console.log(`[anomaly] spike notification sent for org ${orgId}`);

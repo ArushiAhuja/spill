@@ -1,15 +1,6 @@
-import nodemailer from 'nodemailer';
+import { sendEmail } from './agentmail.js';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://getspill.vercel.app';
-
-function makeTransporter(user, pass) {
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: { user, pass },
-  });
-}
 
 function buildHtml({ name }) {
   const firstName = name?.split(' ')[0] || 'there';
@@ -114,26 +105,12 @@ function buildText({ name }) {
 }
 
 export async function sendWelcomeEmail({ to, name }) {
-  if (process.env.DRY_RUN === 'true') {
-    console.log(`[welcome-email] DRY RUN — would send to ${to}`);
-    return;
-  }
-
-  const gmailUser = process.env.GMAIL_USER?.trim();
-  const gmailPass = process.env.GMAIL_APP_PASSWORD?.trim();
-  if (!gmailUser || !gmailPass) {
-    throw new Error('GMAIL_USER and GMAIL_APP_PASSWORD must be set to send welcome emails');
-  }
-
-  const transporter = makeTransporter(gmailUser, gmailPass);
-
-  await transporter.sendMail({
-    from: `"spill" <${gmailUser}>`,
+  await sendEmail({
     to,
     subject: `welcome to spill`,
-    text: buildText({ name }),
     html: buildHtml({ name }),
+    text: buildText({ name }),
+    labels: ['welcome'],
   });
-
   console.log(`[welcome-email] sent to ${to}`);
 }

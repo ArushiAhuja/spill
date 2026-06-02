@@ -1,25 +1,13 @@
 import { query } from './db.js';
-import nodemailer from 'nodemailer';
-
-function makeTransporter(user, pass) {
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com', port: 465, secure: true,
-    auth: { user, pass },
-  });
-}
+import { sendEmail } from './agentmail.js';
 
 export async function sendDigestForOrg(orgId) {
   const { rows: [org] } = await query(`
-    SELECT name, digest_enabled, digest_frequency, digest_recipients,
-           digest_last_sent, digest_gmail_user, digest_gmail_app_password
+    SELECT name, digest_enabled, digest_frequency, digest_recipients, digest_last_sent
     FROM organizations WHERE id = $1
   `, [orgId]);
 
   if (!org?.digest_enabled || !org.digest_recipients?.length) return;
-
-  const gmailUser = org.digest_gmail_user || process.env.GMAIL_USER;
-  const gmailPass = org.digest_gmail_app_password || process.env.GMAIL_APP_PASSWORD;
-  if (!gmailUser || !gmailPass) return;
 
   const isWeekly = org.digest_frequency === 'weekly';
   const hours = isWeekly ? 168 : 24;
@@ -67,16 +55,12 @@ export async function sendDigestForOrg(orgId) {
     ORDER BY post_count DESC LIMIT 3
   `, [orgId]);
 
-  const html = buildHtml(org.name, windowLabel, stats, topPosts, catBreakdown, incidentRows);
-  const text = buildText(org.name, windowLabel, stats, topPosts);
-
-  const transporter = makeTransporter(gmailUser, gmailPass);
-  await transporter.sendMail({
-    from: `"Spill" <${gmailUser}>`,
-    to: org.digest_recipients.join(', '),
+  await sendEmail({
+    to: org.digest_recipients,
     subject: `[Spill Digest] ${org.name} — ${windowLabel} · ${stats.total} signals`,
-    html,
-    text,
+    html: buildHtml(org.name, windowLabel, stats, topPosts, catBreakdown, incidentRows),
+    text: buildText(org.name, windowLabel, stats, topPosts),
+    labels: ['digest'],
   });
 
   await query('UPDATE organizations SET digest_last_sent = NOW() WHERE id = $1', [orgId]);
@@ -91,8 +75,6 @@ export async function sendDigestForAll() {
 }
 
 function buildHtml(orgName, window, stats, topPosts, cats, incidents) {
-  const s = (tag, style, content) => `<${tag} style="${style}">${content}</${tag}>`;
-
   const statCards = [
     ['signals', stats.total, '#64748b'],
     ['escalated', stats.escalated, '#818cf8'],
@@ -151,7 +133,7 @@ function buildHtml(orgName, window, stats, topPosts, cats, incidents) {
     <tbody>${postRows || '<tr><td colspan="4" style="padding:16px 12px;font-size:12px;color:#334155;">no escalated posts in this period</td></tr>'}</tbody>
   </table>
   ${catSection}
-  <div style="margin-top:32px;font-size:11px;color:#334155;text-align:center;">Sent by Spill Social Watch · <a href="https://getspill.vercel.app" style="color:#334155;">getspill.vercel.app</a></div>
+  <div style="margin-top:32px;font-size:11px;color:#334155;text-align:center;">sent by spill · <a href="https://getspill.vercel.app" style="color:#334155;">getspill.vercel.app</a></div>
 </div>
 </body></html>`;
 }
@@ -167,6 +149,6 @@ function buildText(orgName, window, stats, topPosts) {
     ...topPosts.map(p => `  [${p.escalation_score}] ${(p.title||'').slice(0,80)} — ${p.url||''}`),
     '',
     '—',
-    'Spill Social Watch · https://getspill.vercel.app',
+    'spill · https://getspill.vercel.app',
   ].join('\n');
 }

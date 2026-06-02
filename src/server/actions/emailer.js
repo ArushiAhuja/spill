@@ -1,7 +1,5 @@
-import nodemailer from 'nodemailer';
-import { randomUUID } from 'crypto';
+import { sendEmail, SPILL_INBOX } from '../agentmail.js';
 
-const DRY_RUN = process.env.DRY_RUN === 'true';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://getspill.vercel.app';
 
 function buildSubject(post, category) {
@@ -23,7 +21,7 @@ function buildHtml(post, category) {
   const reasoning = post.reasoning || null;
   const postUrl = post.url || null;
   const responseTemplate = post.response_template || null;
-  const dashUrl = `${APP_URL}`;
+  const dashUrl = APP_URL;
 
   const tags = [];
   if (post.is_competitor) tags.push(`<span style="background:#1e3a5f;color:#60a5fa;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:500;letter-spacing:0.05em;">competitor</span>`);
@@ -174,67 +172,26 @@ function buildText(post, category) {
   return lines.join('\n');
 }
 
-let _envTransporter = null;
-function getEnvTransporter() {
-  if (!_envTransporter) {
-    _envTransporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-      },
-    });
-  }
-  return _envTransporter;
-}
-
-function makeTransporter(user, pass) {
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: { user, pass },
-  });
-}
-
-// Returns { messageId, gmailUser, recipients } so callers can track reply threads
-export async function sendEmail(post, category, config) {
+// Returns { messageId, senderInbox, recipients } for response-thread tracking
+export async function sendEscalationEmail(post, category, config) {
   const emails = config?.emails;
   if (!emails?.length) throw new Error('no recipient emails in config');
 
-  const gmailUser = config?.gmail_user?.trim() || process.env.GMAIL_USER;
-  const gmailPass = config?.gmail_app_password?.trim() || process.env.GMAIL_APP_PASSWORD;
-
-  if (!gmailUser) throw new Error('Gmail address not configured — add it to this rule or set GMAIL_USER env var');
-  if (!gmailPass) throw new Error('Gmail App Password not configured — add it to this rule or set GMAIL_APP_PASSWORD env var');
-
-  const to = emails.join(', ');
   const subject = buildSubject(post, category);
   const html = buildHtml(post, category);
   const text = buildText(post, category);
-  const messageId = `<spill-${randomUUID()}@getspill>`;
 
-  if (DRY_RUN) {
-    console.log(`[emailer] DRY RUN — would send to ${to}`);
-    console.log(`  Subject: ${subject}`);
-    return { messageId };
-  }
-
-  const transporter = config?.gmail_user?.trim()
-    ? makeTransporter(gmailUser, gmailPass)
-    : getEnvTransporter();
-
-  await transporter.sendMail({
-    from: `"spill" <${gmailUser}>`,
-    to,
+  const { messageId, threadId } = await sendEmail({
+    to: emails,
     subject,
     html,
     text,
-    messageId,
+    replyTo: SPILL_INBOX,
+    labels: ['escalation'],
   });
 
-  console.log(`[emailer] sent to ${to} (messageId: ${messageId})`);
-  return { messageId, gmailUser, recipients: emails };
+  return { messageId, threadId, senderInbox: SPILL_INBOX, recipients: emails };
 }
+
+// Legacy alias used by existing callers
+export { sendEscalationEmail as sendEmail };

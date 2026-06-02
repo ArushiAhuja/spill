@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@vercel/functions": "^3.6.0",
+    "agentmail": "^0.5.8",
     "bcryptjs": "^2.4.3",
     "google-play-scraper": "^9.1.1",
     "googleapis": "^144.0.0",
