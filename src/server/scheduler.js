@@ -340,20 +340,18 @@ export async function runOrgCycle(orgId) {
         })
       : [];
 
-    // AI-gate: ALL keyword-matched posts + subreddit candidates pass through AI relevance.
-    // Keyword matching narrows candidates but doesn't guarantee relevance — AI validates every post.
-    const aiCandidates = [...tier1, ...tier2, ...tier3Candidates];
-    const brandFiltered = aiCandidates.length > 0
-      ? await aiRelevanceFilter(aiCandidates, org.name, org.description, contextQueries, intel, feedbackContext)
+    // Tier 1 + Tier 2 (keyword matches) always pass through — no AI gate, no LLM classification.
+    // Tier 3 (subreddit-only posts with no keyword match) still go through the AI relevance gate.
+    const directPosts = [...tier1, ...tier2];
+    const tier3Filtered = tier3Candidates.length > 0
+      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext)
       : [];
 
-    if (rawPosts.length !== brandFiltered.length) {
-      console.log(`[org ${orgId}] relevance: candidates=${aiCandidates.length} passed=${brandFiltered.length} dropped=${rawPosts.length - brandFiltered.length}`);
-    }
+    console.log(`[org ${orgId}] relevance: direct=${directPosts.length} (t1=${tier1.length} t2=${tier2.length}) tier3_candidates=${tier3Candidates.length} tier3_passed=${tier3Filtered.length}`);
 
-    // Dedupe
+    // Dedupe all candidates together against existing DB posts
     const seen = new Set();
-    if (brandFiltered.length > 0) {
+    if (directPosts.length > 0 || tier3Filtered.length > 0) {
       const { rows: existing } = await query(
         `SELECT source || '::' || external_id as key FROM posts WHERE org_id = $1`,
         [orgId]
@@ -361,7 +359,9 @@ export async function runOrgCycle(orgId) {
       existing.forEach(r => seen.add(r.key));
     }
 
-    const newPosts = brandFiltered.filter(p => !seen.has(`${p.source}::${p.id}`));
+    const newDirect = directPosts.filter(p => !seen.has(`${p.source}::${p.id}`));
+    const newTier3 = tier3Filtered.filter(p => !seen.has(`${p.source}::${p.id}`));
+    const newPosts = [...newDirect, ...newTier3];
 
     if (!newPosts.length) {
       await query(
@@ -387,10 +387,16 @@ export async function runOrgCycle(orgId) {
       post.partner_name = matchedPartner || null
     }
 
-    // Classify — pass feedbackContext so classifier learns from user corrections
-    const classified = categories.length > 0
-      ? await classifyPosts(newPosts, categories, feedbackContext)
-      : newPosts.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null }));
+    // Tier 3 posts are LLM-classified; direct keyword-matched posts (tier1+2) are stored as-is
+    // with null category — no LLM cost, no false negatives from quota issues.
+    const classifiedTier3 = categories.length > 0 && newTier3.length > 0
+      ? await classifyPosts(newTier3, categories, feedbackContext)
+      : newTier3.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null }));
+
+    const classified = [
+      ...newDirect.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'keyword match', escalated: false, response_template: null })),
+      ...classifiedTier3,
+    ];
 
     // Store in DB, tracking inserted IDs for incident detection
     const insertedIds = [];
