@@ -93,25 +93,9 @@ Relevant indexes (or "none"):`,
         for (const idx of idxs) kept.push(batch[idx]);
       }
     } catch (err) {
-      console.warn('[relevance] AI filter error, using keyword fallback:', err.message);
-      // Keyword fallback: require 2+ significant words from intel profile or context_queries
-      const fallbackTerms = [
-        ...(intel.productKeywords || []),
-        ...(intel.customerPainPoints || []),
-        ...(intel.highRiskTopics || []),
-        ...contextQueries,
-      ];
-      if (fallbackTerms.length >= 2) {
-        const ctxWords = [...new Set(
-          fallbackTerms.flatMap(q => q.toLowerCase().split(/\s+/).filter(w => w.length >= 5))
-        )];
-        for (const p of batch) {
-          const t = `${p.title || ''} ${p.body || ''}`.toLowerCase();
-          const hits = ctxWords.filter(w => new RegExp(`\\b${w}\\b`).test(t)).length;
-          if (hits >= 2) kept.push(p);
-        }
-      }
-      // If no fallback terms, drop the batch rather than flood the feed
+      console.warn('[relevance] AI filter error, dropping tier3 batch:', err.message);
+      // Tier 3 posts have no keyword signal — without AI validation there is no safe
+      // fallback, so drop them. They will be re-evaluated on the next cycle.
     }
   }
 
