@@ -1,9 +1,11 @@
 import { query } from './db.js';
 
-let _done = false;
+// Version-stamp: bump this when adding new migration steps so warm instances re-run
+const MIGRATION_VERSION = 11;
+let _appliedVersion = 0;
 
 export async function ensureMigrations() {
-  if (_done) return;
+  if (_appliedVersion >= MIGRATION_VERSION) return;
 
   // posts extensions — created_at tracks DB insertion time for incident detection
   await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
@@ -164,5 +166,5 @@ export async function ensureMigrations() {
   // Escalation rule mute windows (stored as JSONB array)
   await query(`ALTER TABLE escalation_rules ADD COLUMN IF NOT EXISTS mute_windows JSONB DEFAULT '[]'`);
 
-  _done = true;
+  _appliedVersion = MIGRATION_VERSION;
 }
