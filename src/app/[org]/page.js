@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
 import { timeAgo } from '@/lib/auth'
 
-const SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore']
+const SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore', 'linkedin']
 
 const SOURCE_COLORS = {
   reddit: '#f87171',
@@ -12,6 +12,7 @@ const SOURCE_COLORS = {
   google_news: '#4ade80',
   twitter: '#60a5fa',
   playstore: '#9b8ff7',
+  linkedin: '#0a84ff',
 }
 
 const SOURCE_LABELS = {
@@ -20,6 +21,7 @@ const SOURCE_LABELS = {
   google_news: 'news',
   twitter: 'twitter',
   playstore: 'play',
+  linkedin: 'linkedin',
 }
 
 function ScorePill({ score }) {

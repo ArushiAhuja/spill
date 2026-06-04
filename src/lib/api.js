@@ -118,4 +118,22 @@ export const api = {
 
   // Snooze
   snoozePost: (slug, id, until) => request('PATCH', `/orgs/${slug}/posts/${id}`, { snoozed_until: until || null }),
+
+  // Tickets
+  getTickets: (slug, params = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))).toString()
+    return request('GET', `/orgs/${slug}/tickets${qs ? `?${qs}` : ''}`)
+  },
+  createTicket: (slug, body) => request('POST', `/orgs/${slug}/tickets`, body),
+  getTicket: (slug, id) => request('GET', `/orgs/${slug}/tickets/${id}`),
+  updateTicket: (slug, id, body) => request('PATCH', `/orgs/${slug}/tickets/${id}`, body),
+  addTicketNote: (slug, id, body) => request('POST', `/orgs/${slug}/tickets/${id}/notes`, body),
+  bulkTickets: (slug, body) => request('POST', `/orgs/${slug}/tickets/bulk`, body),
+  getAIResponse: (slug, id, body) => request('POST', `/orgs/${slug}/tickets/${id}/ai-response`, body),
+
+  // Canned responses
+  getCannedResponses: (slug) => request('GET', `/orgs/${slug}/canned-responses`),
+  createCannedResponse: (slug, body) => request('POST', `/orgs/${slug}/canned-responses`, body),
+  updateCannedResponse: (slug, id, body) => request('PATCH', `/orgs/${slug}/canned-responses/${id}`, body),
+  deleteCannedResponse: (slug, id) => request('DELETE', `/orgs/${slug}/canned-responses/${id}`),
 }

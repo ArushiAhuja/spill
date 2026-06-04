@@ -19,6 +19,7 @@ function useIsMobile() {
 
 const NAV_ITEMS = [
   { label: 'feed', href: (org) => `/${org}`, icon: '◈' },
+  { label: 'tickets', href: (org) => `/${org}/tickets`, icon: '◫', plans: ['coordinate', 'command_center', 'enterprise'] },
   { label: 'incidents', href: (org) => `/${org}/incidents`, icon: '◐' },
   { label: 'analytics', href: (org) => `/${org}/analytics`, icon: '◑' },
   { label: 'categories', href: (org) => `/${org}/categories`, icon: '◉' },
@@ -52,6 +53,13 @@ export default function OrgNav({ slug }) {
     }
     load()
   }, [slug])
+
+  const orgPlan = currentOrg?.plan || 'monitor'
+
+  function isNavVisible(item) {
+    if (!item.plans) return true
+    return item.plans.includes(orgPlan)
+  }
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -88,7 +96,7 @@ export default function OrgNav({ slug }) {
         alignItems: 'stretch',
         zIndex: 50,
       }}>
-        {NAV_ITEMS.map(item => {
+        {NAV_ITEMS.filter(isNavVisible).map(item => {
           const active = isActive(item.href)
           return (
             <Link
@@ -261,7 +269,7 @@ export default function OrgNav({ slug }) {
 
       {/* Nav items */}
       <div style={{ flex: 1, padding: '12px 8px', overflowY: 'auto' }}>
-        {NAV_ITEMS.map(item => {
+        {NAV_ITEMS.filter(isNavVisible).map(item => {
           const active = isActive(item.href)
           return (
             <Link

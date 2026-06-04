@@ -3,6 +3,7 @@ import { query } from './db.js';
 import { fetchAll } from './fetchers/index.js';
 import { classifyPosts } from './classifier.js';
 import { fireEscalations } from './actions/index.js';
+import { sendEmail } from './agentmail.js';
 import { checkAnomalies } from './detectors/anomaly.js';
 import { detectIncidents } from './detectors/incidents.js';
 import { ensureMigrations } from './migrate.js';
@@ -194,7 +195,7 @@ export async function runOrgCycle(orgId) {
     logId = log.id;
 
     const { rows: [org] } = await query(
-      'SELECT name, description, industry_monitoring, industry_keywords, competitors, intel_profile, partner_brands, incident_threshold FROM organizations WHERE id = $1',
+      'SELECT name, description, industry_monitoring, industry_keywords, competitors, intel_profile, partner_brands, incident_threshold, plan, sla_first_response_minutes, alert_influencer_threshold, alert_viral_likes FROM organizations WHERE id = $1',
       [orgId]
     );
     const brand = brandKeyword(org?.name);
@@ -371,16 +372,17 @@ export async function runOrgCycle(orgId) {
       post.partner_name = matchedPartner || null
     }
 
-    // Tier 3 posts are LLM-classified; direct keyword-matched posts (tier1+2) are stored as-is
-    // with null category — no LLM cost, no false negatives from quota issues.
+    const noCategories = p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null });
+
+    const classifiedDirect = categories.length > 0 && newDirect.length > 0
+      ? await classifyPosts(newDirect, categories, feedbackContext)
+      : newDirect.map(noCategories);
+
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
       ? await classifyPosts(newTier3, categories, feedbackContext)
-      : newTier3.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null }));
+      : newTier3.map(noCategories);
 
-    const classified = [
-      ...newDirect.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'keyword match', escalated: false, response_template: null })),
-      ...classifiedTier3,
-    ];
+    const classified = [...classifiedDirect, ...classifiedTier3];
 
     // Store in DB, tracking inserted IDs for incident detection
     const insertedIds = [];
@@ -412,6 +414,76 @@ export async function runOrgCycle(orgId) {
       } catch (e) {
         console.error('post insert error:', e.message);
         insertedIds.push(null);
+      }
+    }
+
+    // Command-center: auto-create tickets for influencer/viral posts
+    const isCommandCenter = ['coordinate', 'command_center', 'enterprise'].includes(org?.plan);
+    if (isCommandCenter) {
+      const influencerThreshold = org?.alert_influencer_threshold || 10000;
+      const viralLikes = org?.alert_viral_likes || 500;
+      const slaMinutes = org?.sla_first_response_minutes || 60;
+
+      const alertPosts = classified.filter(p =>
+        p.db_id &&
+        ((p.source === 'twitter' && (p.follower_count || 0) >= influencerThreshold) ||
+         (p.source !== 'twitter' && (p.score || 0) >= viralLikes) ||
+         (p.escalation_score || 0) >= 80)
+      );
+
+      for (const post of alertPosts) {
+        const isInfluencer = (p => (p.source === 'twitter' && (p.follower_count || 0) >= influencerThreshold))(post);
+        const isViral = !isInfluencer && (post.score || 0) >= viralLikes;
+        const isHighEscalation = (post.escalation_score || 0) >= 80;
+        const reason = isInfluencer ? 'influencer post' : isViral ? 'viral post' : 'high escalation';
+
+        try {
+          const slaAt = new Date(Date.now() + slaMinutes * 60 * 1000);
+          const channel = post.source === 'playstore' ? 'playstore' : post.source === 'twitter' ? 'twitter' : 'manual';
+
+          await query(
+            `INSERT INTO tickets (org_id, post_id, source, channel, title, body, author, author_handle, follower_count, url, priority, sla_first_response_at, tags)
+             VALUES ($1,$2,'auto',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             ON CONFLICT DO NOTHING`,
+            [
+              orgId, post.db_id, channel,
+              (post.title || 'Untitled post').slice(0, 200),
+              post.body?.slice(0, 1000) || null,
+              post.author || null, null,
+              post.follower_count || 0,
+              post.url || null,
+              isHighEscalation ? 'urgent' : isInfluencer ? 'high' : 'normal',
+              slaAt,
+              [reason],
+            ]
+          );
+
+          // Instant alert email for influencer / viral
+          if (isInfluencer || isViral) {
+            const { rows: emailRows } = await query(
+              `SELECT u.email FROM users u
+               JOIN org_members om ON om.user_id = u.id
+               WHERE om.org_id = $1 AND om.role IN ('owner','admin')`,
+              [orgId]
+            );
+            if (emailRows.length) {
+              const followerDisplay = post.follower_count ? ` (${post.follower_count.toLocaleString()} followers)` : '';
+              const scoreDisplay = (post.score || 0) > 0 ? ` · ${post.score} likes/upvotes` : '';
+              await sendEmail({
+                to: emailRows.map(r => r.email),
+                subject: `[${org.name}] ${isInfluencer ? '🔥 Influencer' : '📈 Viral'} post alert`,
+                html: `<p><strong>${isInfluencer ? 'High-follower influencer' : 'Rapidly trending post'} detected</strong>${followerDisplay}${scoreDisplay}</p>
+<p><strong>Post:</strong> ${post.title || 'Untitled'}</p>
+${post.body ? `<p>${post.body.slice(0, 300)}</p>` : ''}
+${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
+<p style="color:#888;font-size:12px">Auto-ticket created in Spill · ${reason}</p>`,
+                labels: ['instant-alert', reason.replace(' ', '-')],
+              }).catch(e => console.error('[alert email]', e.message));
+            }
+          }
+        } catch (e) {
+          console.error('[auto-ticket]', e.message);
+        }
       }
     }
 

@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 11;
+const MIGRATION_VERSION = 12;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -175,6 +175,75 @@ export async function ensureMigrations() {
 
   // Escalation rule mute windows (stored as JSONB array)
   await query(`ALTER TABLE escalation_rules ADD COLUMN IF NOT EXISTS mute_windows JSONB DEFAULT '[]'`);
+
+  // Plan column on organizations
+  await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'monitor'`);
+  await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS sla_first_response_minutes INTEGER DEFAULT 60`);
+  await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS sla_subsequent_minutes INTEGER DEFAULT 240`);
+  await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS alert_influencer_threshold INTEGER DEFAULT 10000`);
+  await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS alert_viral_likes INTEGER DEFAULT 500`);
+
+  // Tickets — multi-channel social ticketing
+  await query(`
+    CREATE TABLE IF NOT EXISTS tickets (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+      post_id UUID REFERENCES posts(id) ON DELETE SET NULL,
+      source TEXT NOT NULL DEFAULT 'manual',
+      channel TEXT,
+      status TEXT NOT NULL DEFAULT 'new',
+      priority TEXT DEFAULT 'normal',
+      assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
+      assigned_name TEXT,
+      title TEXT NOT NULL,
+      body TEXT,
+      author TEXT,
+      author_handle TEXT,
+      follower_count INTEGER DEFAULT 0,
+      url TEXT,
+      tags TEXT[] DEFAULT '{}',
+      sla_first_response_at TIMESTAMPTZ,
+      first_responded_at TIMESTAMPTZ,
+      sla_subsequent_at TIMESTAMPTZ,
+      sla_breached BOOLEAN DEFAULT false,
+      alert_sent BOOLEAN DEFAULT false,
+      closed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_tickets_org ON tickets(org_id, status, created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_tickets_post ON tickets(post_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON tickets(assigned_to)`);
+
+  // Ticket notes
+  await query(`
+    CREATE TABLE IF NOT EXISTS ticket_notes (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      ticket_id UUID REFERENCES tickets(id) ON DELETE CASCADE,
+      author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      author_name TEXT,
+      body TEXT NOT NULL,
+      is_internal BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ticket_notes_ticket ON ticket_notes(ticket_id, created_at)`);
+
+  // Canned responses
+  await query(`
+    CREATE TABLE IF NOT EXISTS canned_responses (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      category TEXT,
+      brand_personality TEXT DEFAULT 'professional',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_canned_responses_org ON canned_responses(org_id)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

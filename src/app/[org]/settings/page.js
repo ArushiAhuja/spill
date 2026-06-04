@@ -11,6 +11,7 @@ const SOURCE_COLORS = {
   twitter: '#60a5fa',
   playstore: '#9b8ff7',
   appstore: '#34d399',
+  linkedin: '#0a84ff',
   youtube: '#f87171',
 }
 
@@ -21,6 +22,7 @@ const ALL_SOURCES = [
   { id: 'twitter', label: 'Twitter/X', desc: 'tweets and threads' },
   { id: 'playstore', label: 'Play Store', desc: 'app store reviews' },
   { id: 'appstore', label: 'App Store', desc: 'iOS app store reviews' },
+  { id: 'linkedin', label: 'LinkedIn', desc: 'posts, company pages & professional mentions' },
   { id: 'youtube', label: 'YouTube', desc: 'comments', disabled: true },
 ]
 
@@ -374,6 +376,50 @@ function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
               )}
             </>
           )}
+          {sourceInfo.id === 'linkedin' && (
+            <>
+              <div style={{
+                fontSize: 11,
+                color: '#94a3b8',
+                background: 'rgba(10,132,255,0.07)',
+                border: '1px solid rgba(10,132,255,0.2)',
+                borderRadius: 8,
+                padding: '8px 12px',
+                lineHeight: 1.6,
+              }}>
+                works out of the box — fetches LinkedIn news coverage + Pulse articles via Google News. add a <b>LinkedIn session cookie</b> below to also pull actual post text and engagement data via Apify.
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
+                  li_at session cookie <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155', fontStyle: 'italic' }}>(optional — enables full post scraping)</span>
+                </div>
+                <input
+                  type="password"
+                  value={localData.credentials?.li_at || ''}
+                  onChange={(e) => setCredField('li_at', e.target.value)}
+                  placeholder="AQE..."
+                />
+                <div style={{ fontSize: 11, color: '#334155', marginTop: 4 }}>
+                  from your browser cookies on linkedin.com — key is <code style={{ fontSize: 10 }}>li_at</code>. stored unencrypted.
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
+                  company page handles <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155', fontStyle: 'italic' }}>(optional)</span>
+                </div>
+                <textarea
+                  rows={2}
+                  value={(Array.isArray(localData.config?.company_handles) ? localData.config.company_handles : []).join('\n')}
+                  onChange={(e) => setConfigField('company_handles', e.target.value.split('\n').map(s => s.trim().replace(/^.*linkedin\.com\/company\//i, '').replace(/\/$/, '').trim()).filter(Boolean))}
+                  placeholder={'makemytrip\nswiggy'}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+                <div style={{ fontSize: 11, color: '#334155', marginTop: 4 }}>
+                  slug from linkedin.com/company/<b>slug</b> — used with li_at for company page post scraping.
+                </div>
+              </div>
+            </>
+          )}
           {sourceInfo.id === 'playstore' && (
             <div>
               <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>app ids</div>
@@ -716,8 +762,6 @@ export default function SettingsPage({ params }) {
   const [digestEnabled, setDigestEnabled] = useState(false)
   const [digestFrequency, setDigestFrequency] = useState('daily')
   const [digestRecipients, setDigestRecipients] = useState('')
-  const [digestGmailUser, setDigestGmailUser] = useState('')
-  const [digestGmailPass, setDigestGmailPass] = useState('')
   const [digestSaving, setDigestSaving] = useState(false)
   const [digestSaveMsg, setDigestSaveMsg] = useState('')
 
@@ -749,8 +793,6 @@ export default function SettingsPage({ params }) {
       setDigestEnabled(!!orgData.digest_enabled)
       setDigestFrequency(orgData.digest_frequency || 'daily')
       setDigestRecipients((orgData.digest_recipients || []).join(', '))
-      setDigestGmailUser(orgData.digest_gmail_user || '')
-      setDigestGmailPass(orgData.digest_gmail_app_password || '')
       setSlackWebhook(orgData.slack_webhook_url || '')
       setOrgPartnerBrands((orgData.partner_brands || []).join(', '))
       setIncidentThreshold(orgData.incident_threshold || 5)
@@ -811,8 +853,6 @@ export default function SettingsPage({ params }) {
         digest_enabled: digestEnabled,
         digest_frequency: digestFrequency,
         digest_recipients: digestRecipients.split(/[\s,]+/).map(r => r.trim()).filter(Boolean),
-        digest_gmail_user: digestGmailUser.trim() || null,
-        digest_gmail_app_password: digestGmailPass.trim() || null,
       })
       setDigestSaveMsg('saved')
       setTimeout(() => setDigestSaveMsg(''), 2000)
@@ -1135,13 +1175,8 @@ export default function SettingsPage({ params }) {
                 <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>recipients <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(comma-separated)</span></div>
                 <input type="text" value={digestRecipients} onChange={e => setDigestRecipients(e.target.value)} placeholder="ceo@company.com, head-ops@company.com" />
               </div>
-              <div>
-                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>gmail address <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(sends from this account)</span></div>
-                <input type="email" value={digestGmailUser} onChange={e => setDigestGmailUser(e.target.value)} placeholder="you@gmail.com" autoComplete="off" />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>app password <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(16-char google app password)</span></div>
-                <input type="password" value={digestGmailPass} onChange={e => setDigestGmailPass(e.target.value)} placeholder="abcd efgh ijkl mnop" autoComplete="new-password" />
+              <div style={{ fontSize: 11, color: '#475569', padding: '8px 12px', background: '#191d2b', borderRadius: 6, border: '1px solid #1e2535' }}>
+                Digests are sent from <span style={{ color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>spill@agentmail.to</span>. No email credentials required.
               </div>
             </div>
           )}

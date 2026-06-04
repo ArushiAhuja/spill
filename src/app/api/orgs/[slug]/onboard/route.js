@@ -60,6 +60,7 @@ function buildFallbackConfig(org) {
     google_news: { rss_urls: [`https://news.google.com/rss/search?q=${encodeURIComponent(name)}&hl=en-US&gl=US&ceid=US:en`] },
     twitter:     { queries: [`"${nameLC}"`, `#${name.replace(/\s+/g, '')}`] },
     playstore:   { app_ids: [] },
+    linkedin:    { queries: [name, `${name} review`], company_handles: [nameLC.replace(/\s+/g, '-')] },
   };
 
   return { categories, sources };
@@ -185,7 +186,8 @@ Generate a JSON response with this EXACT structure (no markdown, no explanation,
     "hackernews": { "queries": ["search term"] },
     "google_news": { "rss_urls": ["https://news.google.com/rss/search?q=TERM&hl=en-US&gl=US&ceid=US:en"] },
     "twitter": { "queries": ["@handle OR #brand"] },
-    "playstore": { "app_ids": [] }
+    "playstore": { "app_ids": [] },
+    "linkedin": { "queries": ["brand name", "brand review"], "company_handles": ["linkedin-url-slug"] }
   },
   "intel_profile": {
     "brandKeywords": ["exact brand names people use when discussing this company"],
@@ -208,6 +210,10 @@ Rules for sources.reddit:
 - queries: 3-5 brand-specific terms (include brand name)
 - context_queries: 5-8 topic/industry queries WITHOUT brand name — what customers discuss online
 - subreddits: 4-8 relevant subreddits (no r/ prefix), include "india" for Indian companies
+
+Rules for sources.linkedin:
+- queries: 2-4 brand search terms for LinkedIn post search
+- company_handles: 1-2 LinkedIn company page slugs (the part after linkedin.com/company/) — use the actual slug from the company's LinkedIn URL
 
 Rules for intel_profile:
 - brandKeywords: 2-5 exact phrases/names (include common misspellings, short names)
