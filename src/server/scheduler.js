@@ -374,9 +374,15 @@ export async function runOrgCycle(orgId) {
 
     const noCategories = p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null });
 
-    const classifiedDirect = categories.length > 0 && newDirect.length > 0
-      ? await classifyPosts(newDirect, categories, feedbackContext)
-      : newDirect.map(noCategories);
+    let classifiedDirect;
+    try {
+      classifiedDirect = categories.length > 0 && newDirect.length > 0
+        ? await classifyPosts(newDirect, categories, feedbackContext)
+        : newDirect.map(noCategories);
+    } catch (err) {
+      console.warn('[scheduler] classifyPosts failed for tier1+tier2, storing keyword-matched posts with score 0:', err.message);
+      classifiedDirect = newDirect.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'keyword match', escalated: false, response_template: null }));
+    }
 
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
       ? await classifyPosts(newTier3, categories, feedbackContext)
