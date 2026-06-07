@@ -3,8 +3,9 @@ import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
 import { sendEmail } from '../../../../../../server/agentmail.js';
+import { computeCustomerLabels } from '../../../../../../server/mmt-features.js';
 
-const VALID_STATUSES = new Set(['new', 'open', 'pending', 'woc', 'closed']);
+const VALID_STATUSES = new Set(['new', 'open', 'pending', 'woc', 'awaiting', 'closed']);
 
 // GET /api/orgs/[slug]/tickets/[id]
 export async function GET(request, { params }) {
@@ -50,7 +51,8 @@ export async function PATCH(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const body = await request.json();
-    const { status, priority, assigned_to, assigned_name, tags, forward_to } = body;
+    const { status, priority, assigned_to, assigned_name, tags, forward_to,
+            is_sticky, verified_handle, booking_details, awaiting_customer } = body;
 
     const { rows: [current] } = await query(
       'SELECT * FROM tickets WHERE id = $1 AND org_id = $2',
@@ -78,12 +80,29 @@ export async function PATCH(request, { params }) {
       if (assigned_name) { sets.push(`assigned_name = $${idx++}`); values.push(assigned_name); }
     }
     if (tags !== undefined) { sets.push(`tags = $${idx++}`); values.push(tags); }
+    if (is_sticky !== undefined) { sets.push(`is_sticky = $${idx++}`); values.push(!!is_sticky); }
+    if (verified_handle !== undefined) { sets.push(`verified_handle = $${idx++}`); values.push(!!verified_handle); }
+    if (booking_details !== undefined) { sets.push(`booking_details = $${idx++}`); values.push(booking_details); }
+    if (awaiting_customer !== undefined) { sets.push(`awaiting_customer = $${idx++}`); values.push(!!awaiting_customer); }
     sets.push(`updated_at = NOW()`);
 
     const { rows: [ticket] } = await query(
       `UPDATE tickets SET ${sets.join(', ')} WHERE id = $${idx++} AND org_id = $${idx++} RETURNING *`,
       [...values, id, access.orgId]
     );
+
+    if (verified_handle !== undefined || body.follower_count !== undefined) {
+      const newLabels = computeCustomerLabels({
+        follower_count: ticket.follower_count || 0,
+        verified_handle: ticket.verified_handle || false,
+        mention_count: ticket.mention_count || 1,
+      });
+      await query(
+        'UPDATE tickets SET customer_labels = $1 WHERE id = $2',
+        [newLabels, id]
+      );
+      ticket.customer_labels = newLabels;
+    }
 
     // Forward to CD Lead email
     if (forward_to) {

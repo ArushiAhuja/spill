@@ -25,6 +25,9 @@ const NAV_ITEMS = [
   { label: 'categories', href: (org) => `/${org}/categories`, icon: '◉' },
   { label: 'escalations', href: (org) => `/${org}/escalations`, icon: '◎' },
   { label: 'settings', href: (org) => `/${org}/settings`, icon: '◇' },
+  { label: 'timesheet', href: (org) => `/${org}/mmt/timesheet`, icon: '◷', mmtOnly: true },
+  { label: 'supervisor', href: (org) => `/${org}/mmt/supervisor`, icon: '◧', mmtOnly: true },
+  { label: 'outage log', href: (org) => `/${org}/mmt/outage-log`, icon: '◌', mmtOnly: true },
 ]
 
 export default function OrgNav({ slug }) {
@@ -57,6 +60,7 @@ export default function OrgNav({ slug }) {
   const orgPlan = currentOrg?.plan || 'monitor'
 
   function isNavVisible(item) {
+    if (item.mmtOnly && !currentOrg?.features?.mmt) return false
     if (!item.plans) return true
     return item.plans.includes(orgPlan)
   }

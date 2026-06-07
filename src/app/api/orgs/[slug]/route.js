@@ -41,7 +41,7 @@ export async function PATCH(request, { params }) {
       name, website, description, competitors, industry_monitoring, industry_keywords,
       slack_webhook_url, digest_enabled, digest_frequency, digest_recipients,
       digest_gmail_user, digest_gmail_app_password,
-      partner_brands, incident_threshold,
+      partner_brands, incident_threshold, features,
     } = await request.json();
     const fields = [];
     const values = [];
@@ -69,6 +69,7 @@ export async function PATCH(request, { params }) {
     if (digest_gmail_app_password !== undefined) { fields.push(`digest_gmail_app_password = $${idx++}`); values.push(digest_gmail_app_password || null); }
     if (partner_brands !== undefined) { fields.push(`partner_brands = $${idx++}`); values.push(Array.isArray(partner_brands) ? partner_brands : []); }
     if (incident_threshold !== undefined) { fields.push(`incident_threshold = $${idx++}`); values.push(parseInt(incident_threshold) || 5); }
+    if (features !== undefined) { fields.push(`features = $${idx++}`); values.push(features); }
 
     if (!fields.length) {
       return NextResponse.json({ error: 'no fields to update' }, { status: 400 });

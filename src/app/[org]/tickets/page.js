@@ -11,6 +11,7 @@ const STATUS_TABS = [
   { key: 'open', label: 'Open', color: '#60a5fa' },
   { key: 'pending', label: 'Pending', color: '#fbbf24' },
   { key: 'woc', label: 'WOC', color: '#a78bfa' },
+  { key: 'awaiting', label: 'Awaiting', color: '#fb923c' },
   { key: 'closed', label: 'Closed', color: '#4ade80' },
 ]
 
@@ -89,6 +90,29 @@ function PriorityDot({ priority }) {
   return <span style={{ width: 7, height: 7, borderRadius: '50%', background: p.color, display: 'inline-block', flexShrink: 0 }} title={p.label} />
 }
 
+function CustomerLabelBadge({ label }) {
+  const colors = {
+    'Detractor': '#ef4444',
+    'Imminent Detractor': '#f97316',
+    'High Influencer': '#a855f7',
+    'Verified': '#3b82f6',
+  }
+  const color = colors[label] || '#64748b'
+  return (
+    <span style={{
+      fontSize: 9,
+      fontWeight: 700,
+      padding: '1px 6px',
+      borderRadius: 4,
+      background: color + '22',
+      color,
+      border: `1px solid ${color}44`,
+      textTransform: 'uppercase',
+      letterSpacing: '0.06em',
+    }}>{label}</span>
+  )
+}
+
 export default function TicketsPage() {
   const { org: slug } = useParams()
   const [tickets, setTickets] = useState([])
@@ -121,6 +145,12 @@ export default function TicketsPage() {
   const [saving, setSaving] = useState(false)
   const [showNewCanned, setShowNewCanned] = useState(false)
   const [newCanned, setNewCanned] = useState({ name: '', body: '', category: '', brand_personality: 'professional' })
+  const [org, setOrg] = useState(null)
+  const [mmtEnabled, setMmtEnabled] = useState(false)
+  const [translateLoading, setTranslateLoading] = useState(false)
+  const [translatedText, setTranslatedText] = useState(null)
+  const [filterAging, setFilterAging] = useState('')
+  const [filterAwaiting, setFilterAwaiting] = useState(false)
   const currentUser = getUser()
 
   const loadTickets = useCallback(async () => {
@@ -131,6 +161,8 @@ export default function TicketsPage() {
       if (filterChannel) params.channel = filterChannel
       if (filterPriority) params.priority = filterPriority
       if (searchQuery) params.search = searchQuery
+      if (filterAging) params.aging = filterAging
+      if (filterAwaiting) params.awaiting_customer = 'true'
       const data = await api.getTickets(slug, params)
       setTickets(data.tickets || [])
       setStatusCounts(data.statusCounts || {})
@@ -140,12 +172,13 @@ export default function TicketsPage() {
     } finally {
       setLoading(false)
     }
-  }, [slug, statusTab, filterChannel, filterPriority, searchQuery])
+  }, [slug, statusTab, filterChannel, filterPriority, searchQuery, filterAging, filterAwaiting])
 
   useEffect(() => { loadTickets() }, [loadTickets])
 
   useEffect(() => {
     api.getCannedResponses(slug).then(d => setCannedResponses(d.cannedResponses || [])).catch(() => {})
+    api.getOrg(slug).then(d => { setOrg(d); setMmtEnabled(d?.features?.mmt === true) }).catch(() => {})
   }, [slug])
 
   async function openTicket(ticket) {
@@ -200,6 +233,16 @@ export default function TicketsPage() {
     alert('Forwarded to CD Lead')
   }
 
+  async function translateTicket() {
+    if (!ticketDetail?.body) return
+    setTranslateLoading(true)
+    setTranslatedText(null)
+    try {
+      const data = await api.mmtTranslate(slug, { text: ticketDetail.body })
+      setTranslatedText(data.translated)
+    } catch (e) { console.error(e) } finally { setTranslateLoading(false) }
+  }
+
   async function doBulkAction() {
     const ids = Array.from(selected)
     if (!ids.length) return
@@ -223,7 +266,15 @@ export default function TicketsPage() {
     if (!newTicket.title.trim()) return
     setSaving(true)
     try {
-      await api.createTicket(slug, newTicket)
+      const payload = { ...newTicket }
+      if (mmtEnabled) {
+        const bd = {}
+        for (let n = 1; n <= 8; n++) {
+          if (newTicket[`booking_id_${n}`]) bd[`booking_id_${n}`] = newTicket[`booking_id_${n}`]
+        }
+        payload.booking_details = bd
+      }
+      await api.createTicket(slug, payload)
       setShowNewTicket(false)
       setNewTicket({ title: '', channel: 'manual', priority: 'normal', author: '', body: '', url: '' })
       loadTickets()
@@ -335,6 +386,25 @@ export default function TicketsPage() {
             <option value="">all priorities</option>
             {Object.keys(PRIORITY_LABELS).map(k => <option key={k} value={k}>{k}</option>)}
           </select>
+          {mmtEnabled && (
+            <>
+              <select value={filterAging} onChange={e => setFilterAging(e.target.value)} style={selectStyle()}>
+                <option value="">all ages</option>
+                <option value="2d">older than 2 days</option>
+                <option value="14d">older than 14 days</option>
+              </select>
+              <button
+                onClick={() => setFilterAwaiting(a => !a)}
+                style={{
+                  ...btnStyle(filterAwaiting ? '#fb923c22' : '#1e2535', filterAwaiting ? '#fb923c' : '#64748b'),
+                  border: `1px solid ${filterAwaiting ? '#fb923c44' : '#1e2535'}`,
+                  fontSize: 12,
+                }}
+              >
+                {filterAwaiting ? '⏳ awaiting' : 'awaiting'}
+              </button>
+            </>
+          )}
         </div>
 
         {/* Body: list + detail */}
@@ -414,6 +484,14 @@ export default function TicketsPage() {
                           ))}
                         </div>
                       )}
+                      {mmtEnabled && ticket.customer_labels?.length > 0 && (
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
+                          {ticket.customer_labels.map(lbl => <CustomerLabelBadge key={lbl} label={lbl} />)}
+                        </div>
+                      )}
+                      {mmtEnabled && ticket.reopen_count > 0 && (
+                        <span style={{ fontSize: 10, color: '#f97316' }}>↺ repeat customer</span>
+                      )}
                     </div>
                   </div>
                 )
@@ -472,6 +550,26 @@ export default function TicketsPage() {
                       ))}
                     </div>
 
+                    {mmtEnabled && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                        <button
+                          onClick={() => api.updateTicket(slug, ticketDetail.id, { is_sticky: !ticketDetail.is_sticky }).then(() => {
+                            setTicketDetail(d => ({ ...d, is_sticky: !d.is_sticky }))
+                          })}
+                          style={{
+                            ...btnStyle(ticketDetail.is_sticky ? '#fbbf2422' : '#1e2535', ticketDetail.is_sticky ? '#fbbf24' : '#475569'),
+                            border: `1px solid ${ticketDetail.is_sticky ? '#fbbf2444' : '#1e2535'}`,
+                            padding: '3px 10px', fontSize: 11,
+                          }}
+                        >
+                          {ticketDetail.is_sticky ? '📌 sticky' : '📌 pin'}
+                        </button>
+                        {ticketDetail.awaiting_customer && (
+                          <span style={{ fontSize: 11, color: '#fb923c', fontWeight: 500 }}>⏳ awaiting agent response</span>
+                        )}
+                      </div>
+                    )}
+
                     {/* Assigned */}
                     <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontSize: 11, color: '#475569' }}>assigned to:</span>
@@ -487,6 +585,13 @@ export default function TicketsPage() {
                         {ticketDetail.tags.map(tag => (
                           <span key={tag} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#1e2535', color: '#64748b' }}>#{tag}</span>
                         ))}
+                      </div>
+                    )}
+
+                    {/* MMT customer labels in detail */}
+                    {mmtEnabled && ticketDetail.customer_labels?.length > 0 && (
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8 }}>
+                        {ticketDetail.customer_labels.map(lbl => <CustomerLabelBadge key={lbl} label={lbl} />)}
                       </div>
                     )}
                   </div>
@@ -568,6 +673,21 @@ export default function TicketsPage() {
                       </div>
                     </div>
 
+                    {/* MMT translation */}
+                    {mmtEnabled && ticketDetail.body && (
+                      <div style={{ marginTop: 20, padding: '12px 14px', borderRadius: 8, background: '#191d2b', border: '1px solid #1e2535' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                          <p style={{ fontSize: 11, color: '#64748b', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Translate</p>
+                          <button onClick={translateTicket} disabled={translateLoading} style={{ ...btnStyle('#1e2535', '#94a3b8'), fontSize: 11, padding: '3px 10px' }}>
+                            {translateLoading ? 'translating...' : '🌐 to English'}
+                          </button>
+                        </div>
+                        {translatedText && (
+                          <p style={{ fontSize: 13, color: '#94a3b8', margin: 0, lineHeight: 1.6, fontStyle: 'italic' }}>{translatedText}</p>
+                        )}
+                      </div>
+                    )}
+
                     {/* AI Response generator */}
                     <div style={{ marginTop: 20, padding: '14px', borderRadius: 8, background: '#191d2b', border: '1px solid #1e2535' }}>
                       <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>AI Response Generator</p>
@@ -629,6 +749,23 @@ export default function TicketsPage() {
 
           <label style={labelStyle}>URL</label>
           <input value={newTicket.url} onChange={e => setNewTicket(t => ({ ...t, url: e.target.value }))} style={inputStyle({ width: '100%' })} placeholder="link to original post" />
+
+          {mmtEnabled && (
+            <>
+              <label style={labelStyle}>Booking IDs (MMT)</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {[1,2,3,4,5,6,7,8].map(n => (
+                  <input
+                    key={n}
+                    value={newTicket[`booking_id_${n}`] || ''}
+                    onChange={e => setNewTicket(t => ({ ...t, [`booking_id_${n}`]: e.target.value }))}
+                    style={inputStyle({ width: '100%' })}
+                    placeholder={`Booking ID ${n}`}
+                  />
+                ))}
+              </div>
+            </>
+          )}
 
           <button onClick={createTicket} disabled={saving} style={{ ...btnStyle('#3b82f6', '#fff'), marginTop: 16, width: '100%' }}>
             {saving ? 'creating...' : 'create ticket'}

@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 12;
+const MIGRATION_VERSION = 13;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -244,6 +244,61 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_canned_responses_org ON canned_responses(org_id)`);
+
+  // organizations: feature flags
+  await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS features JSONB DEFAULT '{}'`);
+
+  // tickets: MMT-specific columns
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS customer_labels TEXT[] DEFAULT '{}'`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS mention_count INTEGER DEFAULT 1`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS verified_handle BOOLEAN DEFAULT false`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS booking_details JSONB DEFAULT '{}'`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS is_sticky BOOLEAN DEFAULT false`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reopen_count INTEGER DEFAULT 0`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS awaiting_customer BOOLEAN DEFAULT false`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS last_customer_reply_at TIMESTAMPTZ`);
+
+  // agent_sessions table (MMT timesheet)
+  await query(`
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+      user_name TEXT,
+      user_email TEXT,
+      session_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      login_at TIMESTAMPTZ DEFAULT NOW(),
+      logout_at TIMESTAMPTZ,
+      break_minutes INTEGER DEFAULT 0,
+      notes TEXT,
+      tickets_worked INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // mmt_outage_log table
+  await query(`
+    CREATE TABLE IF NOT EXISTS mmt_outage_log (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'ongoing',
+      impact TEXT,
+      root_cause TEXT,
+      resolution TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_by_name TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  await query(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_org ON agent_sessions(org_id, session_date DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_user ON agent_sessions(user_id, session_date DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_outage_log_org ON mmt_outage_log(org_id, created_at DESC)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

@@ -136,4 +136,13 @@ export const api = {
   createCannedResponse: (slug, body) => request('POST', `/orgs/${slug}/canned-responses`, body),
   updateCannedResponse: (slug, id, body) => request('PATCH', `/orgs/${slug}/canned-responses/${id}`, body),
   deleteCannedResponse: (slug, id) => request('DELETE', `/orgs/${slug}/canned-responses/${id}`),
+
+  // MMT features
+  mmtGetSessions: (slug, date) => request('GET', `/orgs/${slug}/mmt/sessions${date ? `?date=${date}` : ''}`),
+  mmtPostSession: (slug, body) => request('POST', `/orgs/${slug}/mmt/sessions`, body),
+  mmtGetOutageLog: (slug) => request('GET', `/orgs/${slug}/mmt/outage-log`),
+  mmtCreateOutage: (slug, body) => request('POST', `/orgs/${slug}/mmt/outage-log`, body),
+  mmtUpdateOutage: (slug, id, body) => request('PATCH', `/orgs/${slug}/mmt/outage-log/${id}`, body),
+  mmtGetSupervisor: (slug, days) => request('GET', `/orgs/${slug}/mmt/supervisor${days ? `?days=${days}` : ''}`),
+  mmtTranslate: (slug, body) => request('POST', `/orgs/${slug}/mmt/translate`, body),
 }

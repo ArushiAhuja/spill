@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../server/migrate.js';
+import { computeCustomerLabels } from '../../../../../server/mmt-features.js';
 
 // GET /api/orgs/[slug]/tickets
 export async function GET(request, { params }) {
@@ -21,6 +22,8 @@ export async function GET(request, { params }) {
     const priority = url.searchParams.get('priority') || null;
     const tag = url.searchParams.get('tag') || null;
     const search = url.searchParams.get('search') || null;
+    const aging = url.searchParams.get('aging') || null;
+    const awaiting_customer = url.searchParams.get('awaiting_customer') || null;
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '100'), 500);
     const offset = parseInt(url.searchParams.get('offset') || '0');
 
@@ -41,6 +44,14 @@ export async function GET(request, { params }) {
       conditions.push(`(t.title ILIKE $${paramIdx} OR t.author ILIKE $${paramIdx} OR t.author_handle ILIKE $${paramIdx})`);
       values.push(`%${search}%`);
       paramIdx++;
+    }
+    if (aging === '2d') {
+      conditions.push(`t.created_at < NOW() - INTERVAL '2 days'`);
+    } else if (aging === '14d') {
+      conditions.push(`t.created_at < NOW() - INTERVAL '14 days'`);
+    }
+    if (awaiting_customer === 'true') {
+      conditions.push(`t.awaiting_customer = true`);
     }
 
     const where = conditions.join(' AND ');
@@ -89,7 +100,7 @@ export async function POST(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const body = await request.json();
-    const { title, channel = 'manual', post_id, author, author_handle, follower_count, url: ticketUrl, tags, priority = 'normal', body: ticketBody, assigned_to } = body;
+    const { title, channel = 'manual', post_id, author, author_handle, follower_count, url: ticketUrl, tags, priority = 'normal', body: ticketBody, assigned_to, verified_handle = false, booking_details } = body;
 
     if (!title) return NextResponse.json({ error: 'title required' }, { status: 400 });
 
@@ -100,13 +111,16 @@ export async function POST(request, { params }) {
     const slaMinutes = org?.sla_first_response_minutes || 60;
     const slaFirstAt = new Date(Date.now() + slaMinutes * 60 * 1000);
 
+    const initialLabels = computeCustomerLabels({ follower_count: follower_count || 0, verified_handle, mention_count: 1 });
+
     const { rows: [ticket] } = await query(
-      `INSERT INTO tickets (org_id, post_id, source, channel, title, body, author, author_handle, follower_count, url, tags, priority, assigned_to, sla_first_response_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      `INSERT INTO tickets (org_id, post_id, source, channel, title, body, author, author_handle, follower_count, url, tags, priority, assigned_to, sla_first_response_at, verified_handle, booking_details, customer_labels)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING *`,
       [access.orgId, post_id || null, 'manual', channel, title, ticketBody || null,
        author || null, author_handle || null, follower_count || 0, ticketUrl || null,
-       tags || [], priority, assigned_to || null, slaFirstAt]
+       tags || [], priority, assigned_to || null, slaFirstAt,
+       verified_handle, booking_details || {}, initialLabels]
     );
 
     return NextResponse.json({ ticket }, { status: 201 });
