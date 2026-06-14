@@ -150,6 +150,23 @@ export async function PATCH(request, { params }) {
       );
     }
 
+    // Implicit training signals: save/dismiss actions are as informative as explicit labels.
+    // signal_type='implicit' distinguishes these from explicit feedback panel submissions.
+    if (saved === true) {
+      query(
+        `INSERT INTO post_feedback (org_id, post_id, label, explanation, signal_type)
+         VALUES ($1, $2, 'saved', 'user bookmarked this post', 'implicit')`,
+        [access.orgId, id]
+      ).catch(() => {});
+    }
+    if (post_status === 'dismissed') {
+      query(
+        `INSERT INTO post_feedback (org_id, post_id, label, explanation, signal_type)
+         VALUES ($1, $2, 'not_relevant', 'user dismissed without feedback', 'implicit')`,
+        [access.orgId, id]
+      ).catch(() => {});
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });

@@ -68,6 +68,7 @@ export async function GET(request, { params }) {
       [access.orgId]
     );
     const exclusionTerms = org?.intel_profile?.exclusionTerms || [];
+    const boostTerms = org?.intel_profile?.boostTerms || [];
 
     return NextResponse.json({
       feedback: rows,
@@ -75,6 +76,7 @@ export async function GET(request, { params }) {
       page,
       pages: Math.ceil(parseInt(total, 10) / limit),
       exclusionTerms,
+      boostTerms,
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });

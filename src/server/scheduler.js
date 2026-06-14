@@ -7,7 +7,7 @@ import { sendEmail } from './agentmail.js';
 import { checkAnomalies } from './detectors/anomaly.js';
 import { detectIncidents } from './detectors/incidents.js';
 import { ensureMigrations } from './migrate.js';
-import { getOrgFeedbackContext } from './feedback.js';
+import { getOrgFeedbackContext, updateOrgIntelligence } from './feedback.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -231,7 +231,10 @@ export async function runOrgCycle(orgId) {
 
     const orgConfig = { orgId, sources: {} };
     for (const sc of sourceConfigs) {
-      orgConfig.sources[sc.source] = { enabled: true, config: sc.config, credentials: sc.credentials };
+      const cfg = sc.config || {};
+      // Inject brand as default query so sources work out-of-the-box without user configuration
+      const effectiveConfig = (!cfg.queries?.length && brand) ? { ...cfg, queries: [brand] } : cfg;
+      orgConfig.sources[sc.source] = { enabled: true, config: effectiveConfig, credentials: sc.credentials };
     }
 
     const rawPosts = await fetchAll(orgConfig);
@@ -372,23 +375,30 @@ export async function runOrgCycle(orgId) {
       post.partner_name = matchedPartner || null
     }
 
-    const noCategories = p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null });
+    const noCategories = p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null, is_relevant: true });
 
     let classifiedDirect;
     try {
       classifiedDirect = categories.length > 0 && newDirect.length > 0
-        ? await classifyPosts(newDirect, categories, feedbackContext)
+        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description)
         : newDirect.map(noCategories);
     } catch (err) {
       console.warn('[scheduler] classifyPosts failed for tier1+tier2, storing keyword-matched posts with score 0:', err.message);
-      classifiedDirect = newDirect.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'keyword match', escalated: false, response_template: null }));
+      classifiedDirect = newDirect.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'keyword match', escalated: false, response_template: null, is_relevant: true }));
     }
 
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
-      ? await classifyPosts(newTier3, categories, feedbackContext)
+      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description)
       : newTier3.map(noCategories);
 
-    const classified = [...classifiedDirect, ...classifiedTier3];
+    // Drop posts the classifier flagged as not genuinely about this company.
+    // Tier 1+2 pass keyword filters but can still mention the brand incidentally.
+    const allClassified = [...classifiedDirect, ...classifiedTier3];
+    const irrelevant = allClassified.filter(p => p.is_relevant === false);
+    if (irrelevant.length > 0) {
+      console.log(`[org ${orgId}] filtered ${irrelevant.length} irrelevant posts after classification:`, irrelevant.map(p => p.title?.slice(0, 60)).join(' | '));
+    }
+    const classified = allClassified.filter(p => p.is_relevant !== false);
 
     // Store in DB, tracking inserted IDs for incident detection
     const insertedIds = [];
@@ -522,6 +532,13 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
       `UPDATE source_configs SET last_fetch_at = NOW(), last_fetch_error = NULL WHERE org_id = $1 AND enabled = true`,
       [orgId]
     ).catch(() => {})
+
+    // Run intelligence update once per cycle (debounced inside — skips if updated < 2h ago).
+    // This replaces per-feedback-submission calls, eliminating redundant LLM calls when
+    // users submit multiple pieces of feedback in the same session.
+    updateOrgIntelligence(orgId).catch(err =>
+      console.warn(`[org ${orgId}] intelligence update error:`, err.message)
+    );
 
     console.log(`[org ${orgId}] cycle done: ${newPosts.length} new, ${escalated.length} escalated`);
   } catch (err) {

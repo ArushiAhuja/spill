@@ -13,7 +13,6 @@ export async function GET(request, { params }) {
 
     const days = Math.min(90, parseInt(new URL(request.url).searchParams.get('days') || '14'));
 
-    // Daily sentiment per category for last N days
     const { rows: trend } = await query(`
       SELECT
         c.id as category_id,
@@ -29,7 +28,6 @@ export async function GET(request, { params }) {
       ORDER BY c.id, day
     `, [access.orgId, days]);
 
-    // Group by category
     const byCategory = {};
     for (const row of trend) {
       if (!byCategory[row.category_id]) {

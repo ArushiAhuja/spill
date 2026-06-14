@@ -180,6 +180,7 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
   const [explanation, setExplanation] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [submitError, setSubmitError] = useState('')
   const [history, setHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(true)
 
@@ -191,7 +192,11 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
   }, [slug, post.id])
 
   async function handleSubmit() {
-    if (!selectedLabel) return
+    if (!selectedLabel) {
+      setSubmitError('select a label above first')
+      return
+    }
+    setSubmitError('')
     setSubmitting(true)
     try {
       const body = { label: selectedLabel, explanation: explanation.trim() || undefined }
@@ -211,7 +216,9 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
       onFeedbackSubmit?.(submittedLabel)
       setSubmitted(true)
       setTimeout(() => setSubmitted(false), 4000)
-    } catch { /* ignore */ } finally { setSubmitting(false) }
+    } catch (err) {
+      setSubmitError(err?.message === 'unauthorized' ? 'session expired — refresh the page' : 'failed to send — try again')
+    } finally { setSubmitting(false) }
   }
 
   return (
@@ -232,7 +239,7 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
           return (
             <button
               key={lbl.id}
-              onClick={() => setSelectedLabel(isActive ? null : lbl.id)}
+              onClick={() => { setSelectedLabel(isActive ? null : lbl.id); setSubmitError('') }}
               style={{
                 fontSize: 11, padding: '3px 10px', borderRadius: 99,
                 border: `1px solid ${isActive ? c : '#1e2535'}`,
@@ -280,19 +287,22 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
         <button
           onClick={handleSubmit}
-          disabled={!selectedLabel || submitting}
+          disabled={submitting}
           style={{
             fontSize: 11, padding: '4px 14px',
             background: selectedLabel ? '#3b82f6' : '#13161f',
             color: selectedLabel ? '#fff' : '#334155',
             border: `1px solid ${selectedLabel ? '#3b82f6' : '#1e2535'}`,
-            borderRadius: 6, cursor: selectedLabel ? 'pointer' : 'default',
+            borderRadius: 6, cursor: submitting ? 'not-allowed' : 'pointer',
             fontFamily: 'inherit', transition: 'all 0.15s',
           }}
         >
-          {submitting ? '…' : 'submit feedback'}
+          {submitting ? '…' : 'send feedback'}
         </button>
-        {selectedLabel && (
+        {submitError && (
+          <span style={{ fontSize: 11, color: '#f87171' }}>{submitError}</span>
+        )}
+        {!submitError && selectedLabel && (
           <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>
             {['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate'].includes(selectedLabel)
               ? 'spill will exclude similar posts from future cycles'

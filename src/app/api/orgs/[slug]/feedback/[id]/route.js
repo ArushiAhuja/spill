@@ -43,8 +43,8 @@ export async function PATCH(request, { params }) {
       values
     );
 
-    // Refresh intelligence after any edit
-    updateOrgIntelligence(access.orgId).catch(() => {});
+    // Force intelligence refresh — user explicitly changed a signal, don't wait for debounce
+    updateOrgIntelligence(access.orgId, { force: true }).catch(() => {});
 
     return NextResponse.json(updated);
   } catch (err) {
@@ -69,8 +69,8 @@ export async function DELETE(request, { params }) {
     );
     if (!rows.length) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
-    // Rebuild intelligence without the deleted signal
-    updateOrgIntelligence(access.orgId).catch(() => {});
+    // Force rebuild — signal was removed, re-derive terms immediately
+    updateOrgIntelligence(access.orgId, { force: true }).catch(() => {});
 
     return NextResponse.json({ ok: true });
   } catch (err) {

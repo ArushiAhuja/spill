@@ -8,6 +8,7 @@
     "start": "next start -p 3000"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "@vercel/functions": "^3.6.0",
     "agentmail": "^0.5.8",
     "bcryptjs": "^2.4.3",

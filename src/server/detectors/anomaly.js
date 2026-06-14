@@ -61,7 +61,7 @@ async function notifyAnomaly(orgId, count, avg, ratio) {
         'This may indicate a viral complaint, coordinated discussion,',
         'breaking news, or a product incident going public.',
         '',
-        'Log in to Spill to review: https://getspill.vercel.app',
+        `Log in to Spill to review: ${process.env.NEXT_PUBLIC_BASE_URL || 'https://getspill.vercel.app'}`,
         '',
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
         'Sent by Spill (automated)',

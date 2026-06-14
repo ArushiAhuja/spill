@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 13;
+const MIGRATION_VERSION = 16;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -299,6 +299,15 @@ export async function ensureMigrations() {
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_org ON agent_sessions(org_id, session_date DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_sessions_user ON agent_sessions(user_id, session_date DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_outage_log_org ON mmt_outage_log(org_id, created_at DESC)`);
+
+  // post_feedback.field was created NOT NULL but label-only feedback has no field
+  await query(`ALTER TABLE post_feedback ALTER COLUMN field DROP NOT NULL`);
+
+  // Index for fast per-org feedback lookups (getOrgFeedbackContext runs every refresh cycle)
+  await query(`CREATE INDEX IF NOT EXISTS idx_post_feedback_org ON post_feedback(org_id, created_at DESC)`);
+
+  // Distinguish implicit signals (save/dismiss actions) from explicit feedback (feedback panel)
+  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS signal_type TEXT DEFAULT 'explicit'`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

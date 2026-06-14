@@ -127,6 +127,7 @@ export default function FeedbackHistoryPage({ params }) {
   const [error, setError] = useState('')
   const [filter, setFilter] = useState('all')
   const [exclusionTerms, setExclusionTerms] = useState([])
+  const [boostTerms, setBoostTerms] = useState([])
 
   const [editingId, setEditingId] = useState(null)
   const [deleteConfirmId, setDeleteConfirmId] = useState(null)
@@ -141,6 +142,7 @@ export default function FeedbackHistoryPage({ params }) {
       setTotal(data.total || 0)
       setPages(data.pages || 1)
       setExclusionTerms(data.exclusionTerms || [])
+      setBoostTerms(data.boostTerms || [])
     } catch (err) {
       if (err.message === 'unauthorized') router.replace('/login')
       else setError(err.message || 'failed to load')
@@ -194,16 +196,32 @@ export default function FeedbackHistoryPage({ params }) {
       </div>
 
       {/* Learned patterns banner */}
-      {exclusionTerms.length > 0 && (
+      {(exclusionTerms.length > 0 || boostTerms.length > 0) && (
         <div style={{ marginBottom: 24, padding: '12px 16px', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 10 }}>
-          <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>active exclusions — applied every refresh cycle</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {exclusionTerms.map((term, i) => (
-              <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontFamily: 'var(--font-mono)' }}>
-                −{term}
-              </span>
-            ))}
-          </div>
+          {exclusionTerms.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>active exclusions — filtered every cycle</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: boostTerms.length > 0 ? 12 : 0 }}>
+                {exclusionTerms.map((term, i) => (
+                  <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontFamily: 'var(--font-mono)' }}>
+                    −{term}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+          {boostTerms.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>active boosts — prioritized every cycle</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {boostTerms.map((term, i) => (
+                  <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.25)', color: '#4ade80', fontFamily: 'var(--font-mono)' }}>
+                    +{term}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 

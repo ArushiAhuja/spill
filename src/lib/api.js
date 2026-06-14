@@ -94,6 +94,11 @@ export const api = {
   updateFeedback: (slug, id, body) => request('PATCH', `/orgs/${slug}/feedback/${id}`, body),
   deleteFeedback: (slug, id) => request('DELETE', `/orgs/${slug}/feedback/${id}`),
 
+  // AI training data export (JSONL for OpenAI fine-tuning)
+  getTrainingExport: (slug) => fetch(`/api/orgs/${slug}/training`, {
+    headers: { Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('spill_token') : ''}` },
+  }),
+
   // Date range posts
   getPostsInRange: (slug, from_date, to_date, params = {}) =>
     request('GET', `/orgs/${slug}/posts?${new URLSearchParams({ from_date, to_date, limit: 200, ...params }).toString()}`),

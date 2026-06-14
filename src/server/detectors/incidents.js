@@ -55,8 +55,13 @@ export async function detectIncidents(orgId, newPosts, insertedIds, threshold = 
         console.log(`[incidents] new incident for org ${orgId}: "${title}"`);
       }
 
-      // Link newly inserted posts to incident using their DB ids
-      const postDbIds = insertedIds.filter((_, i) => escalatedNew[i]?.category_id === categoryId);
+      // Link newly inserted posts to incident using their DB ids.
+      // insertedIds is parallel to newPosts (same indices), so we match by position.
+      const postDbIds = newPosts
+        .map((p, i) => ({ post: p, dbId: insertedIds[i] }))
+        .filter(({ post }) => post.escalated && post.category_id === categoryId)
+        .map(({ dbId }) => dbId)
+        .filter(Boolean);
       for (const dbId of postDbIds) {
         if (!dbId) continue;
         await query(
