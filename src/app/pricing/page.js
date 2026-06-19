@@ -23,10 +23,10 @@ const PLANS = [
     key: 'monitor',
     name: 'monitor',
     solve: 'see issues.',
-    price: '$149',
+    price: '$399',
     priceSub: '/month',
-    tagline: 'your first internet ops room.',
-    desc: 'for startups, lean teams, and founder-led support.',
+    tagline: 'Catch customer issues before they spread.',
+    desc: 'For teams that need visibility.',
     cta: 'start 7-day trial',
     ctaHref: '/onboarding',
     ctaStyle: 'outline',
@@ -55,10 +55,10 @@ const PLANS = [
     key: 'coordinate',
     name: 'coordinate',
     solve: 'work together.',
-    price: '$499',
+    price: '$999',
     priceSub: '/month',
-    tagline: 'where internet signals become workflows.',
-    desc: 'for cx teams, growth-stage companies, dedicated ops teams.',
+    tagline: 'Turn internet signals into operational workflows.',
+    desc: 'For teams that need accountability.',
     cta: 'start 7-day trial',
     ctaHref: '/onboarding',
     ctaStyle: 'primary',
@@ -93,10 +93,10 @@ const PLANS = [
     key: 'command',
     name: 'command center',
     solve: 'run internet operations.',
-    price: 'from $1,499',
+    price: '$2,999',
     priceSub: '/month',
-    tagline: 'internet incident management.',
-    desc: 'for airlines, delivery, fintech, marketplaces, enterprise ops.',
+    tagline: 'Run internet operations like a real system.',
+    desc: 'For companies where reputation impacts revenue.',
     cta: 'talk to us',
     ctaHref: 'mailto:hello@getspill.io',
     ctaStyle: 'premium',
@@ -340,7 +340,7 @@ function PricingCard({ plan }) {
 
         {/* price */}
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginBottom: 2 }}>
-          <span style={{ fontSize: plan.price.startsWith('from') ? '1.5rem' : '2.4rem', fontWeight: 300, color: '#e2e8f0', letterSpacing: '-0.02em', lineHeight: 1 }}>
+          <span style={{ fontSize: '2.4rem', fontWeight: 300, color: '#e2e8f0', letterSpacing: '-0.02em', lineHeight: 1 }}>
             {plan.price}
           </span>
           <span style={{ fontSize: 12, color: '#334155' }}>{plan.priceSub}</span>
@@ -699,8 +699,24 @@ export default function PricingPage() {
           {/* Enterprise banner */}
           <EnterpriseBanner />
 
-          <div style={{ marginTop: 24, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: '#1e2535' }}>
-            all plans include · ai scoring · activity log · escalation history · 7-day free trial
+          <div style={{
+            marginTop: 24,
+            background: 'rgba(59,130,246,0.04)',
+            border: '1px solid rgba(59,130,246,0.12)',
+            borderRadius: 10,
+            padding: '14px 20px',
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            justifyContent: 'center',
+          }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#3b82f6', whiteSpace: 'nowrap' }}>
+              all plans include:
+            </span>
+            {['shared workspace', 'team invites', 'email alerts', 'Google Sheets integration', 'AI categorization', 'onboarding support'].map((item, i, arr) => (
+              <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 12, color: '#64748b' }}>{item}</span>
+                {i < arr.length - 1 && <span style={{ color: '#1e2535', fontSize: 10 }}>·</span>}
+              </span>
+            ))}
           </div>
         </div>
       </section>
