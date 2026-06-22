@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { getPrompt } from './prompts.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -10,7 +11,7 @@ function getOpenAI() {
 // posts: [{ id, source, title, body, score, created_at, ... }]
 // feedbackContext: string from getOrgFeedbackContext()
 // intelProfile: full intel_profile JSONB from organizations table
-export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null) {
+export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null) {
   const results = [];
   const batchSize = 5;
 
@@ -18,7 +19,7 @@ export async function classifyPosts(posts, categories, feedbackContext = null, o
     const batch = posts.slice(i, i + batchSize);
     try {
       if (process.env.OPENAI_API_KEY) {
-        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile);
+        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile, orgId);
         results.push(...classified);
       } else {
         results.push(...keywordClassify(batch, categories));
@@ -67,7 +68,7 @@ function keywordClassify(posts, categories) {
   });
 }
 
-async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null) {
+async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null) {
   const categoryList = categories.map(c =>
     `- ID: ${c.id} | Name: ${c.name} | Severity: ${c.severity || 0}/30 | Description: ${c.description || 'n/a'}`
   ).join('\n');
@@ -93,13 +94,34 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
 
   const orgContext = orgName ? `Company being monitored: ${orgName}\n${contextParts.join('\n')}\n\n` : '';
 
+  const [systemPrompt, scoringRules] = await Promise.all([
+    orgId ? getPrompt(orgId, 'classifier_system') : null,
+    orgId ? getPrompt(orgId, 'classifier_scoring') : null,
+  ]);
+
+  const systemContent = systemPrompt || 'You are a brand intelligence classifier for a company monitoring system. Your job is to classify social media posts and assess their operational risk. Return ONLY valid JSON, no explanation.';
+
+  const defaultScoring = `Scoring guidance:
+- customer_impact: 0=no direct customer harm, 5=significant frustration/loss, 10=injury/mass financial harm/death
+- operational_urgency: 0=informational only, 5=team should review today, 10=requires response within the hour
+- trust_risk: 0=neutral or positive, 5=notable credibility concern, 10=viral scandal/fraud allegation/regulatory breach
+- virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
+
+Rules:
+- is_relevant: true ONLY if the post genuinely concerns ${orgName || 'this company'}'s products, services, customers, or brand. Set false if the company appears incidentally or the post is about an unrelated topic.${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
+- category_id: best matching category ID. null if not relevant or no match.
+- response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
+- location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`;
+
+  const scoringContent = scoringRules || defaultScoring;
+
   const response = await getOpenAI().chat.completions.create({
     model: 'gpt-4o-mini',
     max_tokens: 2500,
     messages: [
       {
         role: 'system',
-        content: 'You are a brand intelligence classifier for a company monitoring system. Your job is to classify social media posts and assess their operational risk. Return ONLY valid JSON, no explanation.',
+        content: systemContent,
       },
       {
         role: 'user',
@@ -119,17 +141,7 @@ Return a JSON array with exactly ${posts.length} objects:
   "is_relevant": true
 }]
 
-Scoring guidance:
-- customer_impact: 0=no direct customer harm, 5=significant frustration/loss, 10=injury/mass financial harm/death
-- operational_urgency: 0=informational only, 5=team should review today, 10=requires response within the hour
-- trust_risk: 0=neutral or positive, 5=notable credibility concern, 10=viral scandal/fraud allegation/regulatory breach
-- virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
-
-Rules:
-- is_relevant: true ONLY if the post genuinely concerns ${orgName || 'this company'}'s products, services, customers, or brand. Set false if the company appears incidentally or the post is about an unrelated topic.${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
-- category_id: best matching category ID. null if not relevant or no match.
-- response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
-- location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`,
+${scoringContent}`,
       },
     ],
   });

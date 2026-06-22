@@ -136,6 +136,14 @@ export const api = {
   bulkTickets: (slug, body) => request('POST', `/orgs/${slug}/tickets/bulk`, body),
   getAIResponse: (slug, id, body) => request('POST', `/orgs/${slug}/tickets/${id}/ai-response`, body),
 
+  // Prompt management
+  listPrompts: (slug) => request('GET', `/orgs/${slug}/prompts`),
+  getPrompt: (slug, key) => request('GET', `/orgs/${slug}/prompts/${key}`),
+  savePrompt: (slug, key, body) => request('PUT', `/orgs/${slug}/prompts/${key}`, body),
+  getPromptVersions: (slug, key) => request('GET', `/orgs/${slug}/prompts/${key}/versions`),
+  rollbackPrompt: (slug, key, version) => request('POST', `/orgs/${slug}/prompts/${key}/rollback`, { version }),
+  resetPrompt: (slug, key) => request('POST', `/orgs/${slug}/prompts/${key}/reset`),
+
   // Canned responses
   getCannedResponses: (slug) => request('GET', `/orgs/${slug}/canned-responses`),
   createCannedResponse: (slug, body) => request('POST', `/orgs/${slug}/canned-responses`, body),

@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 18;
+const MIGRATION_VERSION = 19;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -316,6 +316,37 @@ export async function ensureMigrations() {
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS resulting_adjustment TEXT`);
   // Store direction for wrong_severity feedback ('lower' | 'higher')
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS severity_direction TEXT`);
+
+  // Phase C — Prompt Management: versioned, org-scoped editable AI prompts
+  await query(`
+    CREATE TABLE IF NOT EXISTS prompts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      prompt_key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      content TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(org_id, prompt_key)
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS prompt_versions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      prompt_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      author_email TEXT,
+      change_summary TEXT,
+      old_content TEXT,
+      new_content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_prompt_versions_org_key ON prompt_versions(org_id, prompt_key, version DESC)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { query } from '../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../server/migrate.js';
+import { getPrompt } from '../../../../../server/prompts.js';
 
 export const maxDuration = 60;
 
@@ -156,6 +157,8 @@ export async function POST(request, { params }) {
       console.log(`[onboarding] fetched ${websiteText.length} chars from ${org.website}`);
     }
 
+    const intelRules = await getPrompt(access.orgId, 'intel_extraction');
+
     // Try AI generation
     if (process.env.OPENAI_API_KEY && (org.description || websiteText)) {
       const websiteSection = websiteText
@@ -220,20 +223,7 @@ Rules for sources.linkedin:
 - queries: 2-4 brand search terms for LinkedIn post search
 - company_handles: 1-2 LinkedIn company page slugs (the part after linkedin.com/company/) — use the actual slug from the company's LinkedIn URL
 
-Rules for intel_profile:
-- brandKeywords: 2-5 exact phrases/names (include common misspellings, short names)
-- productKeywords: 3-8 specific product/service terms (e.g. for aviation academy: "cadet pilot program", "CPL training", "DGCA ground school")
-- customerPainPoints: 5-10 complaint phrases customers use (e.g. "refund not received", "placement not delivered")
-- typicalComplaints: 5-10 recurring complaint patterns as short verb phrases (e.g. "refund not processed after 30 days", "customer care not reachable", "app crashes on payment")
-- operationalRiskQueries: 5-8 searches that find relevant failures (e.g. for aviation: "aviation academy scam india", "pilot training fraud india")
-- customerIntentQueries: 5-8 what customers search (e.g. "best pilot training india cost", "aviation academy review")
-- highRiskTopics: 3-6 regulatory/safety/fraud terms (e.g. "DGCA violation", "license fraud")
-- industryVocabulary: 4-8 technical/industry terms that appear in relevant posts but not in general conversation (e.g. for fintech: "UPI", "NBFC", "KYC", "AML")
-- geographyTerms: 2-4 geographic terms (city, country, region)
-- exclusionTerms: 1-5 words that indicate false positives (e.g. if company is "Chimes", exclude posts with "wind chimes", "door chimes" context)
-- icpDescription: ONE sentence — who their ideal customer is, what they need, and why they choose this company (e.g. "Young Indian professionals seeking hassle-free international travel bookings with reliable customer support")
-- brandVoice: ONE sentence — tone and approach for public communications (e.g. "Empathetic and solution-focused; we acknowledge issues quickly, take ownership, and follow up with resolution timelines")
-- competitorContext: ONE sentence — main competitors and this company's differentiation (e.g. "Competes with MakeMyTrip and Cleartrip; differentiated by lowest-price guarantee and 24/7 human support")
+${intelRules}
 
 Be specific to this company's actual industry. Think like an ops lead at this company — what internet conversations would they want to know about?`;
 

@@ -8,6 +8,7 @@ import { checkAnomalies } from './detectors/anomaly.js';
 import { detectIncidents } from './detectors/incidents.js';
 import { ensureMigrations } from './migrate.js';
 import { getOrgFeedbackContext, updateOrgIntelligence } from './feedback.js';
+import { getPrompt } from './prompts.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -19,7 +20,7 @@ function getOpenAI() {
 // didn't match the brand keyword. GPT decides if the post is genuinely about
 // this company's industry/niche, using description + context_queries as context.
 // Uses strict criteria: when in doubt, exclude.
-async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries = [], intel = {}, feedbackContext = null) {
+async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries = [], intel = {}, feedbackContext = null, orgId = null) {
   if (!posts.length || !process.env.OPENAI_API_KEY) return [];
 
   const operationalContext = [
@@ -50,6 +51,24 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
     }).join('\n');
 
     try {
+      const relevanceCriteria = orgId
+        ? await getPrompt(orgId, 'relevance_filter')
+        : null;
+
+      const criteriaBlock = relevanceCriteria || `Include a post ONLY if it:
+- Directly mentions or is clearly about this company, its products, or its services
+- Discusses customer experience (positive or negative) with this company specifically
+- Covers operational failures — refunds, service quality, safety, delays, fraud — involving this company
+- Reports industry events, regulations, or competitor moves that would concern this company's leadership
+- Contains purchasing intent, reviews, or comparisons that involve this company
+
+Exclude if:
+- The company name or keyword appears only incidentally or in an unrelated context
+- It's about a different company or industry with no connection to this one
+- It's generic content that happens to share a keyword but is about something else entirely
+- It's from a geography with no operational relevance to this company
+- It's personal or lifestyle content with no commercial signal`;
+
       const res = await getOpenAI().chat.completions.create({
         model: 'gpt-4o-mini',
         max_tokens: 80,
@@ -67,19 +86,7 @@ ${operationalContext}
 ${feedbackContext ? `\nLearned exclusions from past feedback:\n${feedbackContext}\n` : ''}
 Posts come from Reddit, Hacker News, Google News, Twitter, and app store reviews. Some matched keyword filters but may not be genuinely about this company. Verify each one actually matters to this company's operations or reputation.
 
-Include a post ONLY if it:
-- Directly mentions or is clearly about this company, its products, or its services
-- Discusses customer experience (positive or negative) with this company specifically
-- Covers operational failures — refunds, service quality, safety, delays, fraud — involving this company
-- Reports industry events, regulations, or competitor moves that would concern this company's leadership
-- Contains purchasing intent, reviews, or comparisons that involve this company
-
-Exclude if:
-- The company name or keyword appears only incidentally or in an unrelated context
-- It's about a different company or industry with no connection to this one
-- It's generic content that happens to share a keyword but is about something else entirely
-- It's from a geography with no operational relevance to this company
-- It's personal or lifestyle content with no commercial signal
+${criteriaBlock}
 
 Posts:
 ${postList}
@@ -340,7 +347,7 @@ export async function runOrgCycle(orgId) {
     // Tier 3 (subreddit-only posts with no keyword match) still go through the AI relevance gate.
     const directPosts = [...tier1, ...tier2];
     const tier3Filtered = tier3Candidates.length > 0
-      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext)
+      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext, orgId)
       : [];
 
     console.log(`[org ${orgId}] relevance: direct=${directPosts.length} (t1=${tier1.length} t2=${tier2.length}) tier3_candidates=${tier3Candidates.length} tier3_passed=${tier3Filtered.length}`);
@@ -388,7 +395,7 @@ export async function runOrgCycle(orgId) {
     let classifiedDirect;
     try {
       classifiedDirect = categories.length > 0 && newDirect.length > 0
-        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel)
+        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel, orgId)
         : newDirect.map(noCategories);
     } catch (err) {
       console.warn('[scheduler] classifyPosts failed for tier1+tier2, storing keyword-matched posts with score 0:', err.message);
@@ -396,7 +403,7 @@ export async function runOrgCycle(orgId) {
     }
 
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
-      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel)
+      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel, orgId)
       : newTier3.map(noCategories);
 
     // Drop posts the classifier flagged as not genuinely about this company.

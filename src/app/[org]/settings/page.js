@@ -1316,6 +1316,31 @@ export default function SettingsPage({ params }) {
         </section>
       )}
 
+      {/* AI configuration section */}
+      <section style={{ marginBottom: 40 }}>
+        <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 16, paddingBottom: 8, borderBottom: '1px solid #1e2535' }}>
+          AI configuration
+        </div>
+        <Link
+          href={`/${slug}/settings/ai-config`}
+          style={{ textDecoration: 'none', display: 'block' }}
+        >
+          <div
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', background: '#13161f', border: '1px solid #1e2535', borderRadius: 10, cursor: 'pointer', transition: 'all 0.15s' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#243047'; e.currentTarget.style.background = '#191d2b' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.background = '#13161f' }}
+          >
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: '#e2e8f0', marginBottom: 3 }}>AI configuration</div>
+              <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+                view and edit the prompts that drive relevance, classification, escalation, and response generation.
+              </div>
+            </div>
+            <span style={{ fontSize: 14, color: '#334155', flexShrink: 0, marginLeft: 16 }}>→</span>
+          </div>
+        </Link>
+      </section>
+
       {/* Memory section */}
       <section style={{ marginBottom: 40 }}>
         <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 16, paddingBottom: 8, borderBottom: '1px solid #1e2535' }}>

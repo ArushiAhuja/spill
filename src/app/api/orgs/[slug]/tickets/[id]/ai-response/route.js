@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { query } from '../../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../../../server/migrate.js';
+import { getPrompt } from '../../../../../../../server/prompts.js';
 
 const PERSONALITIES = {
   professional: 'formal, empathetic, solution-focused corporate tone',
@@ -49,6 +50,8 @@ export async function POST(request, { params }) {
     const typicalComplaints = intel.typicalComplaints?.slice(0, 5).join('; ') || '';
     const previousNotes = notes.filter(n => !n.is_internal).map(n => n.body).join('\n---\n');
 
+    const responseInstructions = await getPrompt(access.orgId, 'response_writer');
+
     const systemPrompt = `You are a social media customer support agent for ${ticket.org_name}.
 ${ticket.org_description ? `About the company: ${ticket.org_description}` : ''}
 ${icpContext ? `Who our customers are: ${icpContext}` : ''}
@@ -57,7 +60,7 @@ ${typicalComplaints ? `Common issues we handle: ${typicalComplaints}` : ''}
 Tone: ${toneDesc}
 ${instructions ? `Special instructions: ${instructions}` : ''}
 
-Write a public-facing customer response. Keep it under 280 characters if channel is Twitter/social media. Be specific, don't use canned phrases. Resolve or clearly state next steps.`;
+${responseInstructions}`;
 
     const userPrompt = `Customer complaint/query:
 Title: ${ticket.title}
