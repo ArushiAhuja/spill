@@ -1,0 +1,69 @@
+{
+  "run_at": "2026-06-22T14:33:54.309Z",
+  "org": "Mamaearth",
+  "metrics": {
+    "precision": 1,
+    "recall": 0.74,
+    "f1": 0.8505747126436781,
+    "accuracy": 0.87,
+    "TP": 37,
+    "FP": 0,
+    "FN": 13,
+    "TN": 50
+  },
+  "false_positives": [],
+  "false_negatives": [
+    {
+      "id": "r007",
+      "title": "Mamaearth Q3 revenue up 38% but margins under pressure"
+    },
+    {
+      "id": "r008",
+      "title": "Mamaearth vitamin C serum turned orange after 2 weeks"
+    },
+    {
+      "id": "r009",
+      "title": "Honest review: Mamaearth sunscreen SPF 50 leaves massive white cast"
+    },
+    {
+      "id": "r012",
+      "title": "Mamaearth's D2C playbook: $1B valuation on influencer marketing"
+    },
+    {
+      "id": "r016",
+      "title": "Mamaearth shampoo vs Himalaya: which is better for oily scalp?"
+    },
+    {
+      "id": "r018",
+      "title": "Is Mamaearth actually cruelty-free? Their certification expired in 2022"
+    },
+    {
+      "id": "r019",
+      "title": "Mamaearth launches new sustainable packaging initiative"
+    },
+    {
+      "id": "r031",
+      "title": "Mamaearth extends to UAE and Singapore markets"
+    },
+    {
+      "id": "r035",
+      "title": "Honasa Consumer (Mamaearth parent) IPO oversubscribed 7x at listing"
+    },
+    {
+      "id": "r038",
+      "title": "Is Mamaearth worth 3x the price vs Himalaya or Biotique?"
+    },
+    {
+      "id": "r045",
+      "title": "Mamaearth's new BHA exfoliant is excellent — best value in India"
+    },
+    {
+      "id": "r047",
+      "title": "Mamaearth partners with Zepto for 10-minute delivery in 15 cities"
+    },
+    {
+      "id": "r050",
+      "title": "Mamaearth or WOW Skin Science for body butter — comparing both"
+    }
+  ]
+}

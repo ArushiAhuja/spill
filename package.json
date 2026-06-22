@@ -5,7 +5,12 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3000"
+    "start": "next start -p 3000",
+    "test:relevance": "node scripts/test-relevance.mjs",
+    "test:relevance:save": "node scripts/test-relevance.mjs --save",
+    "test:classifier": "node scripts/test-classifier.mjs",
+    "test:classifier:save": "node scripts/test-classifier.mjs --save",
+    "test:all": "node scripts/test-relevance.mjs && node scripts/test-classifier.mjs"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
