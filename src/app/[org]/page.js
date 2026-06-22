@@ -32,7 +32,7 @@ function ScorePill({ score }) {
       ? { color: '#f87171', background: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.25)' }
       : s >= 60
       ? { color: '#818cf8', background: 'rgba(129,140,248,0.12)', border: '1px solid rgba(129,140,248,0.25)' }
-      : { color: '#334155', background: '#191d2b', border: '1px solid #1e2535' }
+      : { color: '#475569', background: '#191d2b', border: '1px solid #1e2535' }
 
   return (
     <span style={{
@@ -113,10 +113,10 @@ function WhyFlaggedRow({ post }) {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', marginTop: 4, overflow: 'hidden' }}>
-      <span style={{ fontSize: 9, color: '#334155', fontFamily: 'var(--font-mono)', flexShrink: 0, marginRight: 1 }}>why:</span>
+      <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)', flexShrink: 0, marginRight: 1 }}>why:</span>
       {shown.map(s => <SignalChip key={s.id} signal={s} small />)}
       {overflow > 0 && (
-        <span style={{ fontSize: 9, color: '#334155', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>+{overflow}</span>
+        <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>+{overflow}</span>
       )}
     </div>
   )
@@ -408,7 +408,7 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
   }
 
   return (
-    <div style={{ marginTop: 12, padding: '12px 14px', background: '#0b0d16', border: '1px solid #1e2535', borderRadius: 8, animation: 'fadeIn 0.15s ease both' }}>
+    <div style={{ marginTop: 12, padding: '12px 14px', background: '#0f1220', border: '1px solid #243047', borderRadius: 8, animation: 'fadeIn 0.15s ease both' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)' }}>feedback</span>
@@ -540,7 +540,7 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
                   <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 99, background: `${c}18`, border: `1px solid ${c}44`, color: c, whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
                     {h.label?.replace(/_/g, ' ')}{h.severity_direction ? ` (${h.severity_direction})` : ''}
                   </span>
-                  {h.explanation && <span style={{ fontSize: 11, color: '#334155', lineHeight: 1.4 }}>{h.explanation}</span>}
+                  {h.explanation && <span style={{ fontSize: 11, color: '#64748b', lineHeight: 1.4 }}>{h.explanation}</span>}
                 </div>
                 {h.resulting_adjustment && (
                   <div style={{ fontSize: 10, color: '#3b82f6', marginTop: 2, paddingLeft: 2, fontStyle: 'italic' }}>→ {h.resulting_adjustment}</div>
@@ -558,7 +558,7 @@ function ActionTray({ post, isExpanded, onRead, onToggleReasoning, onArchive, on
   const [moreOpen, setMoreOpen] = useState(false)
   const btnBase = {
     fontSize: 11, padding: '2px 6px', borderRadius: 5,
-    background: 'transparent', color: '#334155',
+    background: 'transparent', color: '#475569',
     border: '1px solid transparent',
     cursor: 'pointer', fontFamily: 'inherit',
     transition: 'all 0.1s', flexShrink: 0, lineHeight: 1.5,
@@ -569,9 +569,9 @@ function ActionTray({ post, isExpanded, onRead, onToggleReasoning, onArchive, on
       <button
         onClick={onRead}
         title={post.reviewed ? 'mark unread' : 'mark read'}
-        style={{ ...btnBase, color: post.reviewed ? '#3b82f6' : '#334155' }}
+        style={{ ...btnBase, color: post.reviewed ? '#3b82f6' : '#475569' }}
         onMouseEnter={e => { e.currentTarget.style.color = '#3b82f6'; e.currentTarget.style.borderColor = 'rgba(59,130,246,0.3)' }}
-        onMouseLeave={e => { e.currentTarget.style.color = post.reviewed ? '#3b82f6' : '#334155'; e.currentTarget.style.borderColor = 'transparent' }}
+        onMouseLeave={e => { e.currentTarget.style.color = post.reviewed ? '#3b82f6' : '#475569'; e.currentTarget.style.borderColor = 'transparent' }}
       >✓</button>
 
       {/* Open source */}
@@ -582,19 +582,17 @@ function ActionTray({ post, isExpanded, onRead, onToggleReasoning, onArchive, on
         title="open source post"
         style={{ ...btnBase, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}
         onMouseEnter={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = '#243047' }}
-        onMouseLeave={e => { e.currentTarget.style.color = '#334155'; e.currentTarget.style.borderColor = 'transparent' }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#475569'; e.currentTarget.style.borderColor = 'transparent' }}
       >↗</a>
 
-      {/* View AI reasoning */}
-      {(post.reasoning || post.response_template) && (
-        <button
-          onClick={onToggleReasoning}
-          title={isExpanded ? 'hide reasoning' : 'AI reasoning'}
-          style={{ ...btnBase, color: isExpanded ? '#3b82f6' : '#334155' }}
-          onMouseEnter={e => { e.currentTarget.style.color = '#3b82f6'; e.currentTarget.style.borderColor = 'rgba(59,130,246,0.3)' }}
-          onMouseLeave={e => { e.currentTarget.style.color = isExpanded ? '#3b82f6' : '#334155'; e.currentTarget.style.borderColor = 'transparent' }}
-        >▾</button>
-      )}
+      {/* Expand — always visible; shows signals + AI reasoning */}
+      <button
+        onClick={onToggleReasoning}
+        title={isExpanded ? 'collapse' : 'expand signals & reasoning'}
+        style={{ ...btnBase, color: isExpanded ? '#3b82f6' : '#475569' }}
+        onMouseEnter={e => { e.currentTarget.style.color = '#3b82f6'; e.currentTarget.style.borderColor = 'rgba(59,130,246,0.3)' }}
+        onMouseLeave={e => { e.currentTarget.style.color = isExpanded ? '#3b82f6' : '#475569'; e.currentTarget.style.borderColor = 'transparent' }}
+      >▾</button>
 
       {/* Archive */}
       <button
@@ -602,7 +600,7 @@ function ActionTray({ post, isExpanded, onRead, onToggleReasoning, onArchive, on
         title="archive — remove from main feed"
         style={btnBase}
         onMouseEnter={e => { e.currentTarget.style.color = '#f59e0b'; e.currentTarget.style.borderColor = 'rgba(245,158,11,0.3)' }}
-        onMouseLeave={e => { e.currentTarget.style.color = '#334155'; e.currentTarget.style.borderColor = 'transparent' }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#475569'; e.currentTarget.style.borderColor = 'transparent' }}
       >⊘</button>
 
       {/* Dismiss */}
@@ -611,7 +609,7 @@ function ActionTray({ post, isExpanded, onRead, onToggleReasoning, onArchive, on
         title="dismiss — hide from feed"
         style={btnBase}
         onMouseEnter={e => { e.currentTarget.style.color = '#f87171'; e.currentTarget.style.borderColor = 'rgba(248,113,113,0.3)' }}
-        onMouseLeave={e => { e.currentTarget.style.color = '#334155'; e.currentTarget.style.borderColor = 'transparent' }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#475569'; e.currentTarget.style.borderColor = 'transparent' }}
       >×</button>
 
       {/* More dropdown */}
@@ -621,7 +619,7 @@ function ActionTray({ post, isExpanded, onRead, onToggleReasoning, onArchive, on
           title="more actions"
           style={{ ...btnBase, letterSpacing: 1 }}
           onMouseEnter={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = '#243047' }}
-          onMouseLeave={e => { e.currentTarget.style.color = '#334155'; e.currentTarget.style.borderColor = 'transparent' }}
+          onMouseLeave={e => { e.currentTarget.style.color = '#475569'; e.currentTarget.style.borderColor = 'transparent' }}
         >⋯</button>
         {moreOpen && (
           <div
@@ -1035,7 +1033,7 @@ export default function FeedPage({ params }) {
     borderRadius: 99,
     border: '1px solid #1e2535',
     background: 'transparent',
-    color: '#64748b',
+    color: '#94a3b8',
     cursor: 'pointer',
     fontFamily: 'inherit',
     transition: 'all 0.12s ease',
@@ -1066,7 +1064,7 @@ export default function FeedPage({ params }) {
         flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 12, color: '#334155', letterSpacing: '0.05em' }}>feed</span>
+          <span style={{ fontSize: 12, color: '#64748b', letterSpacing: '0.05em' }}>feed</span>
           {status?.lastRefresh && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <div className="live-dot" />
@@ -1074,6 +1072,11 @@ export default function FeedPage({ params }) {
                 watching
               </span>
             </div>
+          )}
+          {total > 0 && (
+            <span style={{ fontSize: 11, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+              {total} signals{totalEscalated > 0 ? ` · ${totalEscalated} escalated` : ''}
+            </span>
           )}
         </div>
 
@@ -1095,7 +1098,7 @@ export default function FeedPage({ params }) {
               alignItems: 'center',
               gap: 6,
               fontSize: 12,
-              color: '#64748b',
+              color: '#94a3b8',
               background: 'transparent',
               border: '1px solid #1e2535',
               borderRadius: 8,
@@ -1106,14 +1109,14 @@ export default function FeedPage({ params }) {
               transition: 'all 0.15s ease',
             }}
             onMouseEnter={e => { if (!refreshing) { e.currentTarget.style.borderColor = '#243047'; e.currentTarget.style.color = '#e2e8f0' }}}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#64748b' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#94a3b8' }}
           >
             <span style={{ display: 'inline-block', animation: refreshing ? 'spin 1s linear infinite' : 'none' }}>↻</span>
             refresh
           </button>
 
           {status?.lastRefresh && (
-            <span style={{ fontSize: 11, color: '#334155', fontFamily: 'var(--font-mono)' }}>
+            <span style={{ fontSize: 11, color: '#475569', fontFamily: 'var(--font-mono)' }}>
               {timeAgo(status.lastRefresh)}
             </span>
           )}
@@ -1136,7 +1139,7 @@ export default function FeedPage({ params }) {
             onClick={() => { setFilterSource(''); setPage(1) }}
             style={!filterSource ? filterPillActive : filterPillBase}
             onMouseEnter={e => { if (filterSource) { e.currentTarget.style.borderColor = '#243047'; e.currentTarget.style.color = '#e2e8f0' }}}
-            onMouseLeave={e => { if (filterSource) { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#64748b' }}}
+            onMouseLeave={e => { if (filterSource) { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#94a3b8' }}}
           >
             all
           </button>
@@ -1146,7 +1149,7 @@ export default function FeedPage({ params }) {
               onClick={() => { setFilterSource(src === filterSource ? '' : src); setPage(1) }}
               style={filterSource === src ? { ...filterPillActive, background: SOURCE_COLORS[src] + '22', border: `1px solid ${SOURCE_COLORS[src]}66`, color: SOURCE_COLORS[src] } : filterPillBase}
               onMouseEnter={e => { if (filterSource !== src) { e.currentTarget.style.borderColor = '#243047'; e.currentTarget.style.color = '#e2e8f0' }}}
-              onMouseLeave={e => { if (filterSource !== src) { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#64748b' }}}
+              onMouseLeave={e => { if (filterSource !== src) { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#94a3b8' }}}
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: SOURCE_COLORS[src] || '#64748b', display: 'inline-block' }} />
@@ -1200,8 +1203,8 @@ export default function FeedPage({ params }) {
               onClick={() => { setViewTab(tab.key); setPage(1) }}
               style={{
                 fontSize: 11, padding: '4px 10px', borderRadius: 5,
-                background: viewTab === tab.key ? '#191d2b' : 'transparent',
-                color: viewTab === tab.key ? '#e2e8f0' : '#64748b',
+                background: viewTab === tab.key ? '#1a1f2e' : 'transparent',
+                color: viewTab === tab.key ? '#e2e8f0' : '#94a3b8',
                 border: viewTab === tab.key ? '1px solid #1e2535' : '1px solid transparent',
                 cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
               }}
@@ -1281,29 +1284,6 @@ export default function FeedPage({ params }) {
         </div>
       </div>
 
-      {/* Stats bar */}
-      <div className="feed-stats-bar" style={{
-        padding: '7px 24px',
-        borderBottom: '1px solid #1e2535',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        flexShrink: 0,
-      }}>
-        <span style={{ fontSize: 11.5, color: '#64748b', fontFamily: 'var(--font-mono)' }}>
-          {total} signals
-        </span>
-        {totalEscalated > 0 && (
-          <span style={{ fontSize: 11.5, color: '#3b82f6', fontFamily: 'var(--font-mono)' }}>
-            {totalEscalated} escalated
-          </span>
-        )}
-        {status?.lastRefresh && (
-          <span style={{ fontSize: 11, color: '#334155', fontFamily: 'var(--font-mono)' }}>
-            last seen {timeAgo(status.lastRefresh)}
-          </span>
-        )}
-      </div>
 
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
@@ -1468,7 +1448,7 @@ export default function FeedPage({ params }) {
                       ? 'rgba(59,130,246,0.06)'
                       : isExpanded ? '#13161f' : post.escalated ? 'rgba(248,113,113,0.02)' : 'transparent',
                     transition: 'background 0.1s',
-                    opacity: post.reviewed && !selectedIds.has(post.id) ? 0.45 : 1,
+                    opacity: post.reviewed && !selectedIds.has(post.id) ? 0.55 : 1,
                     cursor: 'default',
                   }}
                   onMouseEnter={e => {

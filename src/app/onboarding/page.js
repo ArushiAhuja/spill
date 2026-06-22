@@ -42,9 +42,9 @@ function ProgressBar({ step, total = 6 }) {
             flex: 1,
             height: 3,
             borderRadius: 99,
-            background: i < step ? '#3b82f6' : '#1e2535',
+            background: i < step ? '#3b82f6' : '#243047',
             transition: 'background 0.3s ease',
-            opacity: i === step - 1 ? 1 : i < step ? 0.6 : 0.4,
+            opacity: i === step - 1 ? 1 : i < step ? 0.65 : 0.5,
           }}
         />
       ))}
@@ -323,7 +323,7 @@ export default function OnboardingPage() {
             <button
               onClick={() => { setError(''); if (formData.name.trim().length >= 2) setStep(2) }}
               disabled={formData.name.trim().length < 2}
-              style={{ ...btnPrimary, opacity: formData.name.trim().length < 2 ? 0.3 : 1 }}
+              style={{ ...btnPrimary, opacity: formData.name.trim().length < 2 ? 0.4 : 1 }}
             >
               continue →
             </button>
@@ -369,7 +369,7 @@ export default function OnboardingPage() {
               <button
                 onClick={() => { setError(''); if (formData.description.trim().length >= 10) setStep(3) }}
                 disabled={formData.description.trim().length < 10}
-                style={{ ...btnPrimary, opacity: formData.description.trim().length < 10 ? 0.3 : 1 }}
+                style={{ ...btnPrimary, opacity: formData.description.trim().length < 10 ? 0.4 : 1 }}
               >
                 continue →
               </button>
@@ -542,49 +542,38 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {/* Step 5: connect tools */}
+        {/* Step 5: what's next */}
         {step === 5 && (
           <div style={{ animation: 'fadeUp 0.5s ease both' }}>
             <div style={{ marginBottom: 32 }}>
               <div style={{ fontSize: 22, fontWeight: 500, color: '#e2e8f0', marginBottom: 8 }}>
-                connect your tools
+                you're almost in
               </div>
-              <div style={{ fontSize: 13, color: '#64748b' }}>
-                not required to start. you can configure these anytime in settings.
+              <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.6 }}>
+                spill will start monitoring right away. a few things worth knowing before you open the dashboard.
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 32 }}>
-              {INTEGRATIONS.map(intg => (
-                <div
-                  key={intg.id}
-                  style={{
-                    padding: '14px 16px',
-                    borderRadius: 10,
-                    background: '#13161f',
-                    border: '1px solid #1e2535',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 13, color: '#64748b' }}>{intg.icon}</span>
-                    <span style={{ fontSize: 13.5, fontWeight: 500, color: '#e2e8f0' }}>{intg.label}</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>{intg.desc}</div>
-                  <div style={{
-                    fontSize: 11,
-                    color: '#334155',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: '3px 8px',
-                    background: '#191d2b',
-                    borderRadius: 99,
-                    border: '1px solid #1e2535',
-                  }}>
-                    configure in settings
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 32 }}>
+              {[
+                { icon: '◈', title: 'your feed', body: 'signals surface as they arrive. escalated posts appear at the top with a red left border.' },
+                { icon: '◉', title: 'categories', body: `we generated ${onboardResult?.categories?.length || 0} signal categories from your description. you can edit or add more in Settings → Categories.` },
+                { icon: '◎', title: 'escalation rules', body: 'spill auto-escalates high-score signals. you can configure thresholds and Slack alerts in Settings → Escalations.' },
+                { icon: '◇', title: 'tune it over time', body: 'use the feedback button on any post to teach spill what matters. it learns from every signal you log.' },
+              ].map(item => (
+                <div key={item.icon} style={{
+                  display: 'flex', gap: 14, padding: '14px 16px',
+                  background: '#13161f', border: '1px solid #1e2535', borderRadius: 10,
+                }}>
+                  <span style={{ fontSize: 14, color: '#3b82f6', flexShrink: 0, marginTop: 1 }}>{item.icon}</span>
+                  <div>
+                    <div style={{ fontSize: 13.5, fontWeight: 500, color: '#e2e8f0', marginBottom: 3 }}>{item.title}</div>
+                    <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.55 }}>{item.body}</div>
                   </div>
                 </div>
               ))}
             </div>
+
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <button onClick={() => setStep(4)} style={btnBack}>← back</button>
               <button onClick={() => setStep(6)} style={btnPrimary}>

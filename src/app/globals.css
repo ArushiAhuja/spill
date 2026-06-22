@@ -48,7 +48,7 @@
     box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
   }
   input::placeholder, textarea::placeholder {
-    color: #334155;
+    color: #475569;
   }
   textarea { resize: vertical; min-height: 80px; }
 

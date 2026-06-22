@@ -113,7 +113,7 @@ export default function OrgNav({ slug }) {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 3,
-                color: active ? '#e2e8f0' : '#475569',
+                color: active ? '#e2e8f0' : '#64748b',
                 fontSize: 10,
                 fontFamily: 'var(--font-sans), system-ui, sans-serif',
                 letterSpacing: '0.04em',
@@ -172,9 +172,9 @@ export default function OrgNav({ slug }) {
       <div style={{ padding: '20px 16px 16px', borderBottom: '1px solid #1e2535' }}>
         <div style={{
           fontSize: 13,
-          fontWeight: 400,
+          fontWeight: 500,
           letterSpacing: '0.25em',
-          color: '#64748b',
+          color: '#94a3b8',
           marginBottom: 12,
         }}>
           spill
@@ -286,12 +286,13 @@ export default function OrgNav({ slug }) {
                 padding: '8px 10px',
                 borderRadius: 8,
                 marginBottom: 2,
-                color: active ? '#e2e8f0' : '#64748b',
-                background: active ? '#1e2338' : 'transparent',
+                color: active ? '#e2e8f0' : '#94a3b8',
+                background: active ? '#1a1f2e' : 'transparent',
                 fontSize: 13,
                 fontWeight: active ? 500 : 400,
                 transition: 'all 0.12s ease',
                 textDecoration: 'none',
+                borderLeft: active ? '2px solid #3b82f6' : '2px solid transparent',
               }}
               onMouseEnter={e => {
                 if (!active) {
@@ -302,11 +303,11 @@ export default function OrgNav({ slug }) {
               onMouseLeave={e => {
                 if (!active) {
                   e.currentTarget.style.background = 'transparent'
-                  e.currentTarget.style.color = '#64748b'
+                  e.currentTarget.style.color = '#94a3b8'
                 }
               }}
             >
-              <span style={{ fontSize: 10, opacity: 0.7 }}>{item.icon}</span>
+              <span style={{ fontSize: 11, color: active ? '#60a5fa' : 'inherit' }}>{item.icon}</span>
               {item.label}
             </Link>
           )
@@ -317,7 +318,7 @@ export default function OrgNav({ slug }) {
       <div style={{ padding: '12px 16px', borderTop: '1px solid #1e2535' }}>
         <div style={{
           fontSize: 11.5,
-          color: '#334155',
+          color: '#64748b',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -330,7 +331,7 @@ export default function OrgNav({ slug }) {
           style={{
             background: 'none',
             border: 'none',
-            color: '#64748b',
+            color: '#475569',
             fontSize: 12,
             cursor: 'pointer',
             fontFamily: 'inherit',
@@ -338,7 +339,7 @@ export default function OrgNav({ slug }) {
             transition: 'color 0.12s',
           }}
           onMouseEnter={e => e.currentTarget.style.color = '#e2e8f0'}
-          onMouseLeave={e => e.currentTarget.style.color = '#64748b'}
+          onMouseLeave={e => e.currentTarget.style.color = '#475569'}
         >
           sign out
         </button>
