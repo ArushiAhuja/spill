@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
 import { timeAgo } from '@/lib/auth'
+import { buildSignals, buildDimensions } from '@/lib/explain'
 
 const SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore', 'linkedin']
 
@@ -76,6 +77,127 @@ function CategoryPill({ name, color }) {
     }}>
       {name}
     </span>
+  )
+}
+
+// ── Explainability components ────────────────────────────────────────────────
+
+function SignalChip({ signal, small }) {
+  const c = signal.color
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: small ? 3 : 4,
+      fontSize: small ? 9.5 : 10.5,
+      padding: small ? '1px 6px' : '2px 8px',
+      borderRadius: 99,
+      background: `${c}12`,
+      border: `1px solid ${c}30`,
+      color: c,
+      whiteSpace: 'nowrap',
+      fontFamily: 'var(--font-mono)',
+      flexShrink: 0,
+    }}>
+      {signal.label}
+      {signal.detail && <span style={{ opacity: 0.65 }}>{signal.detail}</span>}
+    </span>
+  )
+}
+
+function WhyFlaggedRow({ post }) {
+  const signals = buildSignals(post)
+  if (!signals.length) return null
+
+  const MAX_INLINE = 3
+  const shown = signals.slice(0, MAX_INLINE)
+  const overflow = signals.length - MAX_INLINE
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', marginTop: 4, overflow: 'hidden' }}>
+      <span style={{ fontSize: 9, color: '#334155', fontFamily: 'var(--font-mono)', flexShrink: 0, marginRight: 1 }}>why:</span>
+      {shown.map(s => <SignalChip key={s.id} signal={s} small />)}
+      {overflow > 0 && (
+        <span style={{ fontSize: 9, color: '#334155', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>+{overflow}</span>
+      )}
+    </div>
+  )
+}
+
+function DimensionBars({ post }) {
+  const dims = buildDimensions(post)
+  if (!dims) return null
+
+  const barColor = (v) => {
+    if (v >= 7) return '#f87171'
+    if (v >= 4) return '#f59e0b'
+    return '#1e2535'
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {dims.map(d => (
+        <div key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)', width: 140, flexShrink: 0 }}>{d.label}</span>
+          <div style={{ flex: 1, height: 3, background: '#1a1f2e', borderRadius: 99, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: `${d.value * 10}%`,
+              background: barColor(d.value),
+              borderRadius: 99,
+              transition: 'width 0.3s ease',
+            }} />
+          </div>
+          <span style={{ fontSize: 10, color: d.value >= 7 ? '#f87171' : d.value >= 4 ? '#f59e0b' : '#334155', fontFamily: 'var(--font-mono)', width: 28, textAlign: 'right', flexShrink: 0 }}>{d.value}/10</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ExplainabilityPanel({ post }) {
+  const signals = buildSignals(post)
+  const hasDims = !!post.escalation_dimensions
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      {/* Why flagged header */}
+      <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>
+        why spill flagged this
+      </div>
+
+      {/* Score + signal chips */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+        {post.escalation_score > 0 && (
+          <span style={{
+            fontSize: 11, padding: '2px 9px', borderRadius: 99, fontFamily: 'var(--font-mono)',
+            background: post.escalation_score >= 80 ? 'rgba(248,113,113,0.1)' : post.escalation_score >= 60 ? 'rgba(245,158,11,0.1)' : 'rgba(100,116,139,0.1)',
+            border: `1px solid ${post.escalation_score >= 80 ? 'rgba(248,113,113,0.3)' : post.escalation_score >= 60 ? 'rgba(245,158,11,0.3)' : 'rgba(100,116,139,0.2)'}`,
+            color: post.escalation_score >= 80 ? '#f87171' : post.escalation_score >= 60 ? '#f59e0b' : '#64748b',
+          }}>
+            relevance score {post.escalation_score}
+          </span>
+        )}
+        {signals.map(s => <SignalChip key={s.id} signal={s} />)}
+      </div>
+
+      {/* Dimension bars */}
+      {hasDims && (
+        <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(30,37,53,0.5)', borderRadius: 6, border: '1px solid #1e2535' }}>
+          <DimensionBars post={post} />
+        </div>
+      )}
+
+      {/* AI reasoning */}
+      {post.reasoning && (
+        <div>
+          <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
+            AI reasoning
+          </div>
+          <div style={{ fontSize: 12.5, color: '#64748b', lineHeight: 1.6, fontStyle: 'italic' }}>
+            {post.reasoning}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1416,27 +1538,26 @@ export default function FeedPage({ params }) {
                           ⟐ {post.partner_name || 'partner'}
                         </span>
                       )}
-                      {(post.reasoning || post.response_template) && (
-                        <button
-                          onClick={() => setExpandedPostId(isExpanded ? null : post.id)}
-                          title={isExpanded ? 'hide reasoning' : 'show AI reasoning'}
-                          style={{
-                            background: 'none', border: 'none', cursor: 'pointer',
-                            color: isExpanded ? '#3b82f6' : '#334155',
-                            fontSize: 10, padding: '1px 4px', lineHeight: 1,
-                            flexShrink: 0, transition: 'color 0.12s',
-                            fontFamily: 'var(--font-mono)',
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.color = '#3b82f6'}
-                          onMouseLeave={e => e.currentTarget.style.color = isExpanded ? '#3b82f6' : '#334155'}
-                        >
-                          {isExpanded ? '▲' : '▼'}
-                        </button>
-                      )}
+                      <button
+                        onClick={() => setExpandedPostId(isExpanded ? null : post.id)}
+                        title={isExpanded ? 'hide details' : 'show why spill flagged this'}
+                        style={{
+                          background: 'none', border: 'none', cursor: 'pointer',
+                          color: isExpanded ? '#3b82f6' : '#334155',
+                          fontSize: 10, padding: '1px 4px', lineHeight: 1,
+                          flexShrink: 0, transition: 'color 0.12s',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.color = '#3b82f6'}
+                        onMouseLeave={e => e.currentTarget.style.color = isExpanded ? '#3b82f6' : '#334155'}
+                      >
+                        {isExpanded ? '▲' : '▼'}
+                      </button>
                     </div>
                     {post.author && (
                       <div style={{ fontSize: 11, color: '#334155', marginTop: 1 }}>{post.author}</div>
                     )}
+                    <WhyFlaggedRow post={post} />
                   </div>
 
                   {/* category pill */}
@@ -1535,7 +1656,7 @@ export default function FeedPage({ params }) {
                   />
                 </div>
 
-                {/* Expanded panel — reasoning, notes, feedback */}
+                {/* Expanded panel — explainability, notes, feedback */}
                 {isExpanded && (
                   <div style={{
                     padding: '10px 24px 12px',
@@ -1543,18 +1664,9 @@ export default function FeedPage({ params }) {
                     borderTop: '1px solid #1e2535',
                     animation: 'fadeIn 0.15s ease both',
                   }}>
-                    {post.reasoning && (
-                      <div style={{ marginBottom: post.response_template ? 10 : 0 }}>
-                        <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
-                          ai reasoning
-                        </div>
-                        <div style={{ fontSize: 12.5, color: '#64748b', lineHeight: 1.6 }}>
-                          {post.reasoning}
-                        </div>
-                      </div>
-                    )}
+                    <ExplainabilityPanel post={post} />
                     {post.response_template && (
-                      <div>
+                      <div style={{ marginBottom: 10 }}>
                         <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
                           suggested response
                         </div>

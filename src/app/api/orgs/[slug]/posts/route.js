@@ -97,8 +97,12 @@ export async function GET(request, { params }) {
          p.is_competitor, p.competitor_name, p.is_influencer,
          p.response_template, p.post_status, p.acknowledged_at, p.resolved_at,
          p.notes, p.location_tag, p.is_partner, p.partner_name, p.follower_count,
-         p.manually_escalated, p.saved_at,
-         p.fetched_at, p.post_created_at
+         p.manually_escalated, p.saved_at, p.snoozed_until,
+         p.fetched_at, p.post_created_at,
+         p.escalation_dimensions,
+         (SELECT COUNT(*)::int FROM post_feedback pf
+          WHERE pf.post_id = p.id
+            AND pf.label IN ('useful', 'high_signal', 'missed_context')) AS positive_feedback_count
        FROM posts p
        LEFT JOIN categories c ON c.id = p.category_id
        WHERE ${where}
