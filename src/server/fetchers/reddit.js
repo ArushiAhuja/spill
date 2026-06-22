@@ -108,14 +108,17 @@ async function fetchDirect(queries, subreddits, customThreads, operationalQuerie
     : [brandWord];
 
   const endpoints = [
-    ...queries.map(q =>
-      `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=new&t=day&limit=100`
-    ),
+    // Global search: new (last 24h) + top (last week) for brand queries
+    ...queries.flatMap(q => [
+      `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=new&t=day&limit=100`,
+      `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=top&t=week&limit=25`,
+    ]),
     // Search each subreddit with brand word + context queries for broader topical coverage
     ...subreddits.flatMap(sr =>
-      subredditSearchTerms.map(term =>
-        `https://www.reddit.com/r/${sr}/search.json?q=${encodeURIComponent(term)}&restrict_sr=1&sort=new&t=week&limit=25`
-      )
+      subredditSearchTerms.flatMap(term => [
+        `https://www.reddit.com/r/${sr}/search.json?q=${encodeURIComponent(term)}&restrict_sr=1&sort=new&t=week&limit=25`,
+        `https://www.reddit.com/r/${sr}/search.json?q=${encodeURIComponent(term)}&restrict_sr=1&sort=top&t=week&limit=25`,
+      ])
     ),
   ];
 

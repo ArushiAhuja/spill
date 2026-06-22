@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 
-const ALL_SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore', 'appstore', 'linkedin', 'instagram', 'youtube'];
+const ALL_SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore', 'appstore', 'linkedin', 'instagram', 'youtube', 'trustpilot'];
 
 // PATCH /api/orgs/[slug]/sources/[source]
 export async function PATCH(request, { params }) {

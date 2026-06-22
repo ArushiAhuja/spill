@@ -14,18 +14,20 @@ const SOURCE_COLORS = {
   linkedin: '#0a84ff',
   instagram: '#e1306c',
   youtube: '#f87171',
+  trustpilot: '#00b67a',
 }
 
 const ALL_SOURCES = [
   { id: 'reddit', label: 'Reddit', desc: 'posts, comments & discussions' },
   { id: 'hackernews', label: 'Hacker News', desc: 'show HN, ask HN, discussions' },
-  { id: 'google_news', label: 'Google News', desc: 'news articles and press coverage' },
+  { id: 'google_news', label: 'News & RSS', desc: 'Google News, Bing, NewsAPI, custom RSS feeds' },
   { id: 'twitter', label: 'Twitter/X', desc: 'tweets and threads' },
-  { id: 'playstore', label: 'Play Store', desc: 'app store reviews' },
-  { id: 'appstore', label: 'App Store', desc: 'iOS app store reviews' },
+  { id: 'youtube', label: 'YouTube', desc: 'videos mentioning your brand (YouTube Data API v3)' },
+  { id: 'trustpilot', label: 'Trustpilot', desc: 'public customer reviews — no API key needed' },
+  { id: 'playstore', label: 'Play Store', desc: 'app store reviews — IN, US, GB' },
+  { id: 'appstore', label: 'App Store', desc: 'iOS app store reviews — IN, US, GB' },
   { id: 'linkedin', label: 'LinkedIn', desc: 'posts, company pages & professional mentions' },
   { id: 'instagram', label: 'Instagram', desc: 'public profiles, posts & brand mentions' },
-  { id: 'youtube', label: 'YouTube', desc: 'comments', disabled: true },
 ]
 
 function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
@@ -133,7 +135,15 @@ function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
     }))
   }
 
-  const hasNoCreds = sourceInfo.id === 'hackernews' || sourceInfo.id === 'google_news' || sourceInfo.id === 'playstore' || sourceInfo.id === 'appstore'
+  const hasNoCreds = sourceInfo.id === 'hackernews' || sourceInfo.id === 'google_news' || sourceInfo.id === 'playstore' || sourceInfo.id === 'appstore' || sourceInfo.id === 'trustpilot'
+
+  const domainsValue = Array.isArray(localData.config?.domains)
+    ? localData.config.domains.join('\n')
+    : localData.config?.domains || ''
+
+  const countriesValue = Array.isArray(localData.config?.countries)
+    ? localData.config.countries.join(', ')
+    : localData.config?.countries || ''
 
   return (
     <div style={{
@@ -279,22 +289,13 @@ function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
           )}
 
           {/* Config fields */}
-          {sourceInfo.id !== 'playstore' && sourceInfo.id !== 'appstore' && sourceInfo.id !== 'youtube' && (
+          {sourceInfo.id !== 'playstore' && sourceInfo.id !== 'appstore' && sourceInfo.id !== 'youtube' && sourceInfo.id !== 'trustpilot' && sourceInfo.id !== 'google_news' && (
             <div>
-              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
-                {sourceInfo.id === 'google_news' ? 'rss urls' : 'search queries'}
-              </div>
+              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>search queries</div>
               <textarea
                 rows={4}
-                value={sourceInfo.id === 'google_news' ? rssValue : queriesValue}
-                onChange={(e) => {
-                  const lines = e.target.value.split('\n')
-                  if (sourceInfo.id === 'google_news') {
-                    setConfigField('rss_urls', lines)
-                  } else {
-                    setConfigField('queries', lines)
-                  }
-                }}
+                value={queriesValue}
+                onChange={(e) => setConfigField('queries', e.target.value.split('\n'))}
                 placeholder="one per line"
                 style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
               />
@@ -376,6 +377,78 @@ function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
                   </div>
                 </div>
               )}
+            </>
+          )}
+          {sourceInfo.id === 'google_news' && (
+            <>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>search queries</div>
+                <div style={{ fontSize: 11, color: '#334155', marginBottom: 6 }}>auto-generates Google News + Bing RSS per query — no config needed beyond this list</div>
+                <textarea
+                  rows={4}
+                  value={queriesValue}
+                  onChange={(e) => setConfigField('queries', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
+                  placeholder={'IndiGo Airlines\nIndiGo flight delay\nIndiGo refund'}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>custom RSS feeds <span style={{ textTransform: 'none', letterSpacing: 0, fontStyle: 'italic' }}>(optional — one URL per line)</span></div>
+                <textarea
+                  rows={3}
+                  value={rssValue}
+                  onChange={(e) => setConfigField('rss_urls', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
+                  placeholder="https://example.com/feed.rss"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+              </div>
+              <div style={{ fontSize: 11, color: '#475569', padding: '8px 12px', background: '#191d2b', borderRadius: 6, border: '1px solid #1e2535' }}>
+                Set <span style={{ color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>NEWSAPI_KEY</span> in Vercel environment variables to also pull from NewsAPI.org (free tier: 100 req/day).
+              </div>
+            </>
+          )}
+          {sourceInfo.id === 'youtube' && (
+            <>
+              <div style={{
+                fontSize: 11, color: '#94a3b8',
+                background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.2)',
+                borderRadius: 8, padding: '8px 12px', lineHeight: 1.6,
+              }}>
+                requires <b>YouTube Data API v3</b> key. free quota: 10,000 units/day (~100 brand searches). get one at <span style={{ color: '#f87171', fontFamily: 'var(--font-mono)' }}>console.cloud.google.com</span>, then set <span style={{ color: '#f87171', fontFamily: 'var(--font-mono)' }}>YOUTUBE_API_KEY</span> in your Vercel environment variables.
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>search queries</div>
+                <textarea
+                  rows={4}
+                  value={queriesValue}
+                  onChange={(e) => setConfigField('queries', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
+                  placeholder={'IndiGo Airlines review\nIndiGo flight experience\nIndiGo complaint'}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+                <div style={{ fontSize: 11, color: '#334155', marginTop: 4 }}>searches videos published in the last 24h matching each query</div>
+              </div>
+            </>
+          )}
+          {sourceInfo.id === 'trustpilot' && (
+            <>
+              <div style={{
+                fontSize: 11, color: '#94a3b8',
+                background: 'rgba(0,182,122,0.07)', border: '1px solid rgba(0,182,122,0.2)',
+                borderRadius: 8, padding: '8px 12px', lineHeight: 1.6,
+              }}>
+                reads public Trustpilot reviews via RSS — no API key needed. reviews must be publicly visible on your Trustpilot profile.
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>business domains <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(one per line — your domain as listed on Trustpilot)</span></div>
+                <textarea
+                  rows={3}
+                  value={domainsValue}
+                  onChange={(e) => setConfigField('domains', e.target.value.split('\n').map(s => s.trim().replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '').trim()).filter(Boolean))}
+                  placeholder={'yourcompany.com'}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+                <div style={{ fontSize: 11, color: '#334155', marginTop: 4 }}>e.g. <span style={{ fontFamily: 'var(--font-mono)' }}>yourcompany.com</span> maps to <span style={{ fontFamily: 'var(--font-mono)' }}>trustpilot.com/review/yourcompany.com</span></div>
+              </div>
             </>
           )}
           {sourceInfo.id === 'linkedin' && (
@@ -462,28 +535,52 @@ function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
             </>
           )}
           {sourceInfo.id === 'playstore' && (
-            <div>
-              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>app ids</div>
-              <textarea
-                rows={3}
-                value={appIdsValue}
-                onChange={(e) => setConfigField('app_ids', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
-                placeholder="com.example.app (one per line)"
-                style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
-              />
-            </div>
+            <>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>app ids <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(one per line)</span></div>
+                <textarea
+                  rows={3}
+                  value={appIdsValue}
+                  onChange={(e) => setConfigField('app_ids', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
+                  placeholder="com.example.app"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>countries <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(comma-separated ISO codes — default: in, us, gb)</span></div>
+                <input
+                  type="text"
+                  value={countriesValue}
+                  onChange={(e) => setConfigField('countries', e.target.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))}
+                  placeholder="in, us, gb"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+              </div>
+            </>
           )}
           {sourceInfo.id === 'appstore' && (
-            <div>
-              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>app IDs (one per line)</div>
-              <textarea
-                rows={3}
-                value={appIdsValue}
-                onChange={(e) => setConfigField('app_ids', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
-                placeholder="123456789"
-                style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
-              />
-            </div>
+            <>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>app IDs <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(one per line — numeric ID)</span></div>
+                <textarea
+                  rows={3}
+                  value={appIdsValue}
+                  onChange={(e) => setConfigField('app_ids', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
+                  placeholder="123456789"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>countries <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155' }}>(comma-separated ISO codes — default: in, us, gb)</span></div>
+                <input
+                  type="text"
+                  value={countriesValue}
+                  onChange={(e) => setConfigField('countries', e.target.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))}
+                  placeholder="in, us, gb"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+              </div>
+            </>
           )}
 
           {/* Save */}
