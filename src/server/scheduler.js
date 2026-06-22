@@ -55,19 +55,20 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
         ? await getPrompt(orgId, 'relevance_filter')
         : null;
 
-      const criteriaBlock = relevanceCriteria || `Include a post ONLY if it:
-- Directly mentions or is clearly about this company, its products, or its services
-- Discusses customer experience (positive or negative) with this company specifically
-- Covers operational failures — refunds, service quality, safety, delays, fraud — involving this company
-- Reports industry events, regulations, or competitor moves that would concern this company's leadership
-- Contains purchasing intent, reviews, or comparisons that involve this company
+      const criteriaBlock = relevanceCriteria || `DEFAULT RULE: If this company's name or a specific product name appears in the post title or body, INCLUDE it — unless a strict exclusion below applies with high confidence.
 
-Exclude if:
-- The company name or keyword appears only incidentally or in an unrelated context
-- It's about a different company or industry with no connection to this one
-- It's generic content that happens to share a keyword but is about something else entirely
-- It's from a geography with no operational relevance to this company
-- It's personal or lifestyle content with no commercial signal`;
+INCLUDE a post if it:
+- Names this company, its products, executives, or parent company in any meaningful context (reviews, complaints, news, comparisons, questions)
+- Discusses this company's business performance, funding, IPO, regulatory matters, lawsuits, partnerships, or market position
+- Reports a customer experience (positive or negative) directly involving this company's products or services
+- Covers operational failures — refunds, delivery, safety, quality, fraud — specifically about this company
+- Contains purchasing intent or product comparisons where this company is one of the subjects
+
+EXCLUDE only if one of these applies with high confidence:
+- This company's name does not appear at all and there is no clear link to this specific company
+- The company is mentioned only as a single passing word in a post that is entirely about something unrelated
+- The post is about a completely different company or topic and this company has no substantive role
+- It is entirely generic how-to or educational content with zero company-specific signal`;
 
       const res = await getOpenAI().chat.completions.create({
         model: 'gpt-4o-mini',

@@ -1,0 +1,175 @@
+{
+  "run_at": "2026-06-22T14:56:05.844Z",
+  "pass_rate": 0.8,
+  "passed": 8,
+  "total": 10,
+  "results": [
+    {
+      "id": "tc001",
+      "label": "Baby allergic reaction — urgent safety",
+      "passed": true,
+      "scores": {
+        "customer_impact": 10,
+        "operational_urgency": 10,
+        "trust_risk": 10,
+        "virality_potential": 10
+      },
+      "escalation_score": 100,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "Severe allergic reaction requiring emergency care indicates critical harm and high urgency for response.",
+      "failures": []
+    },
+    {
+      "id": "tc002",
+      "label": "Cashback fraud allegation — trust risk",
+      "passed": true,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 10,
+        "virality_potential": 5
+      },
+      "escalation_score": 82,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "Allegations of a cashback scam and denial from customer service present a significant trust issue.",
+      "failures": []
+    },
+    {
+      "id": "tc003",
+      "label": "Positive product review — low urgency",
+      "passed": true,
+      "scores": {
+        "customer_impact": 0,
+        "operational_urgency": 0,
+        "trust_risk": 0,
+        "virality_potential": 0
+      },
+      "escalation_score": 17,
+      "escalated": false,
+      "is_relevant": true,
+      "reasoning": "Positive review on product effectiveness indicates customer satisfaction with no immediate risk.",
+      "failures": []
+    },
+    {
+      "id": "tc004",
+      "label": "SEBI regulatory probe — high trust risk",
+      "passed": true,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 10,
+        "virality_potential": 5
+      },
+      "escalation_score": 61,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "Regulatory investigation raises significant trust concerns and indicates potential financial risk.",
+      "failures": []
+    },
+    {
+      "id": "tc005",
+      "label": "Delivery complaint — moderate service issue",
+      "passed": true,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 5,
+        "virality_potential": 0
+      },
+      "escalation_score": 34,
+      "escalated": false,
+      "is_relevant": true,
+      "reasoning": "Delayed delivery and damaged product indicate significant customer service failures.",
+      "failures": []
+    },
+    {
+      "id": "tc006",
+      "label": "Competitor-only post — not relevant to Mamaearth",
+      "passed": true,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 5,
+        "virality_potential": 10
+      },
+      "escalation_score": 53,
+      "escalated": true,
+      "is_relevant": false,
+      "reasoning": "The post discusses potentially fake Mamaearth products with serious implications for health and trust.",
+      "failures": []
+    },
+    {
+      "id": "tc007",
+      "label": "Fake products — critical trust + safety",
+      "passed": false,
+      "scores": {
+        "customer_impact": 6,
+        "operational_urgency": 6,
+        "trust_risk": 10,
+        "virality_potential": 5
+      },
+      "escalation_score": 83,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "This post indicates a regulatory ruling against Mamaearth for misleading claims, reflecting significant trust risk.",
+      "failures": [
+        "customer_impact_min: expected >= 8, got 6",
+        "operational_urgency_min: expected >= 8, got 6"
+      ]
+    },
+    {
+      "id": "tc008",
+      "label": "General skincare advice — irrelevant generic content",
+      "passed": true,
+      "scores": {
+        "customer_impact": 0,
+        "operational_urgency": 0,
+        "trust_risk": 0,
+        "virality_potential": 0
+      },
+      "escalation_score": 14,
+      "escalated": false,
+      "is_relevant": false,
+      "reasoning": "This post is a general reminder about skincare practices and does not directly concern Mamaearth or its products.",
+      "failures": []
+    },
+    {
+      "id": "tc009",
+      "label": "Consumer forum ruling — regulatory + customer impact",
+      "passed": false,
+      "scores": {
+        "customer_impact": 3,
+        "operational_urgency": 0,
+        "trust_risk": 2,
+        "virality_potential": 2
+      },
+      "escalation_score": 42,
+      "escalated": false,
+      "is_relevant": true,
+      "reasoning": "The post expresses mild dissatisfaction with product scent but does not indicate severe issues.",
+      "failures": [
+        "operational_urgency_min: expected >= 5, got 0",
+        "trust_risk_min: expected >= 6, got 2",
+        "escalated: expected escalated=true, score=42"
+      ]
+    },
+    {
+      "id": "tc010",
+      "label": "Mild quality complaint — low urgency",
+      "passed": true,
+      "scores": {
+        "customer_impact": 4,
+        "operational_urgency": 4,
+        "trust_risk": 5,
+        "virality_potential": 5
+      },
+      "escalation_score": 32,
+      "escalated": false,
+      "is_relevant": true,
+      "reasoning": "The user's experience with poor customer service suggests significant operational concerns.",
+      "failures": []
+    }
+  ]
+}

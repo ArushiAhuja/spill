@@ -99,16 +99,16 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
     orgId ? getPrompt(orgId, 'classifier_scoring') : null,
   ]);
 
-  const systemContent = systemPrompt || 'You are a brand intelligence classifier for a company monitoring system. Your job is to classify social media posts and assess their operational risk. Return ONLY valid JSON, no explanation.';
+  const systemContent = systemPrompt || `You are a brand intelligence classifier for a company monitoring system. Classify each post in the exact order given. Return ONLY a valid JSON array with one object per post, in the same order. No explanation, no markdown, no extra text. When in doubt about is_relevant, default to false — do not assume relevance if the connection to the monitored company is unclear.`;
 
   const defaultScoring = `Scoring guidance:
-- customer_impact: 0=no direct customer harm, 5=significant frustration/loss, 10=injury/mass financial harm/death
-- operational_urgency: 0=informational only, 5=team should review today, 10=requires response within the hour
-- trust_risk: 0=neutral or positive, 5=notable credibility concern, 10=viral scandal/fraud allegation/regulatory breach
+- customer_impact: 0=no direct customer harm, 5=significant frustration/financial loss, 8=hospitalisation or mass harm, 10=death/class-action/mass financial injury
+- operational_urgency: 0=informational only, 5=team should review today, 7=formal government/regulatory action (SEBI probe, consumer court ruling, police complaint, regulatory notice, lawsuit) requiring leadership attention within hours, 10=requires immediate public response within the hour
+- trust_risk: 0=neutral/positive, 5=notable credibility concern, 6=significant adverse product/service experience with viral potential (e.g., hospitalisation from product use, major service failure with evidence), 7=formal regulatory allegation or institutional investigation (SEBI inquiry, false-advertising ruling, exposé by journalist/NGO), 10=fraud allegation/active scandal/regulatory breach with confirmed penalties
 - virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
 
 Rules:
-- is_relevant: true ONLY if the post genuinely concerns ${orgName || 'this company'}'s products, services, customers, or brand. Set false if the company appears incidentally or the post is about an unrelated topic.${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
+- is_relevant: Set to FALSE when: (a) the company name "${orgName || 'this company'}" does not appear in the post AND there is no clear product/service connection, OR (b) the post is entirely about a different company with no mention of this one. Set TRUE only when this company is a named or obvious subject of the post.${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
 - category_id: best matching category ID. null if not relevant or no match.
 - response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
 - location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`;
@@ -128,8 +128,9 @@ Rules:
         content: `${orgContext}Categories available:\n${categoryList}\n${feedbackSection}
 Posts to classify:\n${postsText}
 
-Return a JSON array with exactly ${posts.length} objects:
+Return a JSON array with EXACTLY ${posts.length} objects. Include a "post_index" field (1-based) so results can be matched back to posts even if order shifts:
 [{
+  "post_index": 1,
   "category_id": "uuid or null",
   "customer_impact": 0-10,
   "operational_urgency": 0-10,
@@ -138,7 +139,7 @@ Return a JSON array with exactly ${posts.length} objects:
   "reasoning": "one sentence",
   "response_template": "string or null",
   "location_tag": "city name or null",
-  "is_relevant": true
+  "is_relevant": true_or_false
 }]
 
 ${scoringContent}`,
@@ -150,7 +151,35 @@ ${scoringContent}`,
   const match = raw.match(/\[[\s\S]*\]/);
   if (!match) throw new Error('no JSON array in classifier response');
 
-  const classifications = JSON.parse(match[0]);
+  const rawClassifications = JSON.parse(match[0]);
+
+  // Re-index by post_index (1-based) so batch drift doesn't cause mismatches.
+  // Fall back to positional order if post_index is absent.
+  const byIndex = {};
+  for (const r of rawClassifications) {
+    const idx = Number.isInteger(r.post_index) ? r.post_index - 1 : -1;
+    if (idx >= 0 && idx < posts.length && !byIndex[idx]) byIndex[idx] = r;
+  }
+  // Fill any gaps positionally from results that had no valid post_index
+  const orphans = rawClassifications.filter(r => {
+    const idx = Number.isInteger(r.post_index) ? r.post_index - 1 : -1;
+    return idx < 0 || idx >= posts.length;
+  });
+  let orphanPtr = 0;
+  const classifications = posts.map((_, i) => {
+    if (byIndex[i]) return byIndex[i];
+    return orphans[orphanPtr++] || null;
+  });
+
+  // Build brand + intel keyword patterns for the relevance guard below
+  const brandPhrase = (orgName || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+  const brandPattern = brandPhrase
+    ? new RegExp(`\\b${brandPhrase.replace(/\s+/g, '\\s+')}\\b`, 'i')
+    : null;
+  const intelKws = [
+    ...(intel.brandKeywords || []),
+    ...(intel.productKeywords || []),
+  ].map(k => k.toLowerCase()).filter(k => k.length >= 4);
 
   return posts.map((post, idx) => {
     const cls = classifications[idx] || {
@@ -158,6 +187,20 @@ ${scoringContent}`,
       customer_impact: 0, operational_urgency: 0, trust_risk: 0, virality_potential: 0,
       reasoning: 'unclassified', response_template: null, is_relevant: true,
     };
+
+    // Relevance guard: if the AI says relevant but neither the brand name nor any
+    // intel keyword appears in the post, override to irrelevant.
+    // This catches hallucinated relevance for generic or competitor-only posts.
+    // Tier-2 posts (operational keyword match) always have intel keywords so they pass through.
+    if (cls.is_relevant !== false && brandPattern) {
+      const postText = `${post.title || ''} ${post.body || ''}`;
+      const hasBrand = brandPattern.test(postText);
+      const hasIntelKw = intelKws.some(kw => postText.toLowerCase().includes(kw));
+      if (!hasBrand && !hasIntelKw) {
+        cls.is_relevant = false;
+      }
+    }
+
     const category = categories.find(c => c.id === cls.category_id);
     const dimensions = {
       customer_impact:    clamp(cls.customer_impact    || 0, 0, 10),

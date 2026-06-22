@@ -1,0 +1,176 @@
+{
+  "run_at": "2026-06-22T14:51:53.674Z",
+  "pass_rate": 0.7,
+  "passed": 7,
+  "total": 10,
+  "results": [
+    {
+      "id": "tc001",
+      "label": "Baby allergic reaction — urgent safety",
+      "passed": true,
+      "scores": {
+        "customer_impact": 10,
+        "operational_urgency": 10,
+        "trust_risk": 10,
+        "virality_potential": 10
+      },
+      "escalation_score": 100,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "A serious allergic reaction leading to an ER visit raises significant safety concerns.",
+      "failures": []
+    },
+    {
+      "id": "tc002",
+      "label": "Cashback fraud allegation — trust risk",
+      "passed": true,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 10,
+        "virality_potential": 5
+      },
+      "escalation_score": 82,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "Allegations of a widespread cashback scam indicate significant fraud concerns that could damage trust.",
+      "failures": []
+    },
+    {
+      "id": "tc003",
+      "label": "Positive product review — low urgency",
+      "passed": true,
+      "scores": {
+        "customer_impact": 0,
+        "operational_urgency": 0,
+        "trust_risk": 0,
+        "virality_potential": 0
+      },
+      "escalation_score": 17,
+      "escalated": false,
+      "is_relevant": true,
+      "reasoning": "The post is a positive review regarding product effectiveness.",
+      "failures": []
+    },
+    {
+      "id": "tc004",
+      "label": "SEBI regulatory probe — high trust risk",
+      "passed": false,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 10,
+        "virality_potential": 5
+      },
+      "escalation_score": 61,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "Ongoing SEBI investigations regarding undisclosed payments could pose significant regulatory and trust risks.",
+      "failures": [
+        "operational_urgency_min: expected >= 6, got 5"
+      ]
+    },
+    {
+      "id": "tc005",
+      "label": "Delivery complaint — moderate service issue",
+      "passed": true,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 5,
+        "virality_potential": 5
+      },
+      "escalation_score": 42,
+      "escalated": false,
+      "is_relevant": true,
+      "reasoning": "Delivery issues combined with poor customer service experience indicate operational concerns that need urgent attention.",
+      "failures": []
+    },
+    {
+      "id": "tc006",
+      "label": "Competitor-only post — not relevant to Mamaearth",
+      "passed": false,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 5,
+        "trust_risk": 5,
+        "virality_potential": 10
+      },
+      "escalation_score": 53,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "The post highlights the harmful effects of a product leading to significant customer impact and potential reputation damage.",
+      "failures": [
+        "is_relevant: expected false, got true",
+        "customer_impact_max: expected <= 3, got 5"
+      ]
+    },
+    {
+      "id": "tc007",
+      "label": "Fake products — critical trust + safety",
+      "passed": true,
+      "scores": {
+        "customer_impact": 10,
+        "operational_urgency": 10,
+        "trust_risk": 10,
+        "virality_potential": 10
+      },
+      "escalation_score": 99,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "The post discusses counterfeit products potentially endangering customers, raising significant trust concerns.",
+      "failures": []
+    },
+    {
+      "id": "tc008",
+      "label": "General skincare advice — irrelevant generic content",
+      "passed": false,
+      "scores": {
+        "customer_impact": 5,
+        "operational_urgency": 0,
+        "trust_risk": 0,
+        "virality_potential": 5
+      },
+      "escalation_score": 54,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "The post serves as a reminder about patch testing, emphasizing customer safety but not prompting immediate company action.",
+      "failures": [
+        "is_relevant: expected false, got true",
+        "customer_impact_max: expected <= 2, got 5"
+      ]
+    },
+    {
+      "id": "tc009",
+      "label": "Consumer forum ruling — regulatory + customer impact",
+      "passed": true,
+      "scores": {
+        "customer_impact": 10,
+        "operational_urgency": 10,
+        "trust_risk": 10,
+        "virality_potential": 10
+      },
+      "escalation_score": 75,
+      "escalated": true,
+      "is_relevant": true,
+      "reasoning": "This post brings attention to a legal ruling against Mamaearth, indicating a significant regulatory risk and potential customer harm.",
+      "failures": []
+    },
+    {
+      "id": "tc010",
+      "label": "Mild quality complaint — low urgency",
+      "passed": true,
+      "scores": {
+        "customer_impact": 2,
+        "operational_urgency": 0,
+        "trust_risk": 2,
+        "virality_potential": 5
+      },
+      "escalation_score": 29,
+      "escalated": false,
+      "is_relevant": true,
+      "reasoning": "The post notes a change in product scent but is generally positive about the effectiveness, indicating minor impact.",
+      "failures": []
+    }
+  ]
+}

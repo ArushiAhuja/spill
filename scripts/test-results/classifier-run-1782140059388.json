@@ -1,7 +1,7 @@
 {
-  "saved_at": "2026-06-22T14:58:25.500Z",
-  "pass_rate": 1,
-  "passed": 10,
+  "run_at": "2026-06-22T14:54:19.388Z",
+  "pass_rate": 0.9,
+  "passed": 9,
   "total": 10,
   "results": [
     {
@@ -9,15 +9,15 @@
       "label": "Baby allergic reaction — urgent safety",
       "passed": true,
       "scores": {
-        "customer_impact": 8,
+        "customer_impact": 10,
         "operational_urgency": 10,
-        "trust_risk": 6,
-        "virality_potential": 7
+        "trust_risk": 10,
+        "virality_potential": 10
       },
-      "escalation_score": 93,
+      "escalation_score": 100,
       "escalated": true,
       "is_relevant": true,
-      "reasoning": "Severe allergic reaction reported leading to an ER visit indicates high customer impact and urgency for a response.",
+      "reasoning": "The post describes a severe allergic reaction in a baby, causing immediate health concerns.",
       "failures": []
     },
     {
@@ -26,14 +26,14 @@
       "passed": true,
       "scores": {
         "customer_impact": 5,
-        "operational_urgency": 7,
-        "trust_risk": 7,
+        "operational_urgency": 5,
+        "trust_risk": 10,
         "virality_potential": 5
       },
-      "escalation_score": 81,
+      "escalation_score": 82,
       "escalated": true,
       "is_relevant": true,
-      "reasoning": "Multiple reports of cashback promises unfulfilled indicate significant customer frustration and a notable credibility concern.",
+      "reasoning": "There are widespread complaints about a cashback scam, threatening customer trust and credibility.",
       "failures": []
     },
     {
@@ -41,32 +41,34 @@
       "label": "Positive product review — low urgency",
       "passed": true,
       "scores": {
-        "customer_impact": 2,
+        "customer_impact": 0,
         "operational_urgency": 0,
         "trust_risk": 0,
         "virality_potential": 0
       },
-      "escalation_score": 19,
+      "escalation_score": 17,
       "escalated": false,
       "is_relevant": true,
-      "reasoning": "The post reflects a satisfied customer experience with the product, indicating a positive signal for the brand.",
+      "reasoning": "The post shares a positive customer experience with a product.",
       "failures": []
     },
     {
       "id": "tc004",
       "label": "SEBI regulatory probe — high trust risk",
-      "passed": true,
+      "passed": false,
       "scores": {
-        "customer_impact": 6,
-        "operational_urgency": 7,
-        "trust_risk": 7,
-        "virality_potential": 6
+        "customer_impact": 0,
+        "operational_urgency": 5,
+        "trust_risk": 10,
+        "virality_potential": 5
       },
-      "escalation_score": 62,
+      "escalation_score": 57,
       "escalated": true,
       "is_relevant": true,
-      "reasoning": "Investigation by SEBI presents a significant risk and urgency due to the potential implications for the company's operations.",
-      "failures": []
+      "reasoning": "The SEBI investigation could lead to serious trust and regulatory risks for the brand.",
+      "failures": [
+        "operational_urgency_min: expected >= 6, got 5"
+      ]
     },
     {
       "id": "tc005",
@@ -76,12 +78,12 @@
         "customer_impact": 5,
         "operational_urgency": 5,
         "trust_risk": 5,
-        "virality_potential": 3
+        "virality_potential": 5
       },
-      "escalation_score": 39,
+      "escalation_score": 42,
       "escalated": false,
       "is_relevant": true,
-      "reasoning": "Delivery issues and lack of response from customer service indicate significant frustration and potential operational risk.",
+      "reasoning": "A damaged product delivery and lack of response signifies customer service issues.",
       "failures": []
     },
     {
@@ -91,13 +93,13 @@
       "scores": {
         "customer_impact": 5,
         "operational_urgency": 5,
-        "trust_risk": 6,
-        "virality_potential": 5
+        "trust_risk": 5,
+        "virality_potential": 10
       },
-      "escalation_score": 47,
-      "escalated": false,
+      "escalation_score": 53,
+      "escalated": true,
       "is_relevant": false,
-      "reasoning": "The post expresses significant frustration with a product that resulted in hair damage, indicating a notable credibility concern.",
+      "reasoning": "The post alleges severe quality issues leading to customer dissatisfaction and has potential virality due to its alarming nature.",
       "failures": []
     },
     {
@@ -105,15 +107,15 @@
       "label": "Fake products — critical trust + safety",
       "passed": true,
       "scores": {
-        "customer_impact": 8,
+        "customer_impact": 10,
         "operational_urgency": 10,
         "trust_risk": 10,
         "virality_potential": 10
       },
-      "escalation_score": 97,
+      "escalation_score": 99,
       "escalated": true,
       "is_relevant": true,
-      "reasoning": "The warning about fake products, along with laboratory testing results, indicates a significant risk to customers and a potential fraud allegation with high engagement.",
+      "reasoning": "This post raises serious concerns about counterfeit products being marketed as genuine Mamaearth items, posing a significant trust risk.",
       "failures": []
     },
     {
@@ -129,7 +131,7 @@
       "escalation_score": 14,
       "escalated": false,
       "is_relevant": false,
-      "reasoning": "The post is a general reminder about skincare practices and does not mention Mamaearth or imply a direct connection.",
+      "reasoning": "The post is informative but does not specifically relate to Mamaearth products.",
       "failures": []
     },
     {
@@ -137,15 +139,15 @@
       "label": "Consumer forum ruling — regulatory + customer impact",
       "passed": true,
       "scores": {
-        "customer_impact": 5,
-        "operational_urgency": 7,
-        "trust_risk": 7,
-        "virality_potential": 6
+        "customer_impact": 10,
+        "operational_urgency": 10,
+        "trust_risk": 10,
+        "virality_potential": 10
       },
-      "escalation_score": 61,
+      "escalation_score": 75,
       "escalated": true,
       "is_relevant": true,
-      "reasoning": "The ruling against the company for misleading claims poses a significant regulatory and credibility risk.",
+      "reasoning": "This post highlights a significant legal ruling against Mamaearth regarding misleading claims, impacting brand reputation severely.",
       "failures": []
     },
     {
@@ -153,15 +155,15 @@
       "label": "Mild quality complaint — low urgency",
       "passed": true,
       "scores": {
-        "customer_impact": 2,
+        "customer_impact": 3,
         "operational_urgency": 0,
         "trust_risk": 0,
-        "virality_potential": 3
+        "virality_potential": 0
       },
-      "escalation_score": 25,
+      "escalation_score": 20,
       "escalated": false,
       "is_relevant": true,
-      "reasoning": "The post indicates a minor product issue regarding scent but does not imply significant harm or risk.",
+      "reasoning": "The post conveys a minor issue regarding product scent but does not suggest significant problems impacting customers fundamentally.",
       "failures": []
     }
   ]

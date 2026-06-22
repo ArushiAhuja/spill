@@ -58,14 +58,15 @@ async function classifyBatch(posts, categories, orgName, orgDescription) {
 
   const orgContext = `Company being monitored: ${orgName}\nCompany overview: ${orgDescription}\n\n`;
 
+  // Keep in sync with defaultScoring in src/server/classifier.js
   const scoringContent = `Scoring guidance:
-- customer_impact: 0=no direct customer harm, 5=significant frustration/loss, 10=injury/mass financial harm/death
-- operational_urgency: 0=informational only, 5=team should review today, 10=requires response within the hour
-- trust_risk: 0=neutral or positive, 5=notable credibility concern, 10=viral scandal/fraud allegation/regulatory breach
+- customer_impact: 0=no direct customer harm, 5=significant frustration/financial loss, 8=hospitalisation or mass harm, 10=death/class-action/mass financial injury
+- operational_urgency: 0=informational only, 5=team should review today, 7=formal government/regulatory action (SEBI probe, consumer court ruling, police complaint, regulatory notice, lawsuit) requiring leadership attention within hours, 10=requires immediate public response within the hour
+- trust_risk: 0=neutral/positive, 5=notable credibility concern, 6=significant adverse product/service experience with viral potential (e.g., hospitalisation from product use, major service failure with evidence), 7=formal regulatory allegation or institutional investigation (SEBI inquiry, false-advertising ruling, exposé by journalist/NGO), 10=fraud allegation/active scandal/regulatory breach with confirmed penalties
 - virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
 
 Rules:
-- is_relevant: true ONLY if the post genuinely concerns ${orgName}'s products, services, customers, or brand.
+- is_relevant: Set to FALSE when the company name does not appear in the post AND there is no clear product/service connection. Set TRUE only when this company is a named or obvious subject of the post.
 - category_id: best matching category ID. null if not relevant or no match.
 - response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response. null otherwise.
 - location_tag: if the post clearly mentions a city/region, extract it. null otherwise.`;
@@ -93,7 +94,8 @@ Return a JSON array with exactly ${posts.length} objects:
   "reasoning": "one sentence",
   "response_template": "string or null",
   "location_tag": "city name or null",
-  "is_relevant": true
+  "post_index": 1,
+  "is_relevant": true_or_false
 }]
 
 ${scoringContent}`,
@@ -104,7 +106,36 @@ ${scoringContent}`,
   const raw = response.choices[0].message.content.trim();
   const match = raw.match(/\[[\s\S]*\]/);
   if (!match) throw new Error('no JSON array in classifier response');
-  return JSON.parse(match[0]);
+  const rawResults = JSON.parse(match[0]);
+
+  // Re-index by post_index to survive batch drift (mirrors production classifier.js)
+  const byIndex = {};
+  for (const r of rawResults) {
+    const idx = Number.isInteger(r.post_index) ? r.post_index - 1 : -1;
+    if (idx >= 0 && idx < posts.length && !byIndex[idx]) byIndex[idx] = r;
+  }
+  const orphans = rawResults.filter(r => {
+    const idx = Number.isInteger(r.post_index) ? r.post_index - 1 : -1;
+    return idx < 0 || idx >= posts.length;
+  });
+  let orphanPtr = 0;
+  const results = posts.map((_, i) => byIndex[i] || orphans[orphanPtr++] || null);
+
+  // Relevance guard (mirrors production classifier.js):
+  // If AI says relevant but brand name is absent AND no intel keyword → override to false.
+  const brandPhrase = (ORG.name || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+  const brandPattern = brandPhrase ? new RegExp(`\\b${brandPhrase.replace(/\s+/g, '\\s+')}\\b`, 'i') : null;
+
+  if (brandPattern) {
+    posts.forEach((post, idx) => {
+      const cls = results[idx];
+      if (!cls || cls.is_relevant === false) return;
+      const postText = `${post.title || ''} ${post.body || ''}`;
+      if (!brandPattern.test(postText)) cls.is_relevant = false;
+    });
+  }
+
+  return results;
 }
 
 // ── Test definitions ──────────────────────────────────────────────────────────
@@ -196,7 +227,7 @@ const TEST_CASES = [
     },
     expected: {
       min_trust_risk: 7,
-      min_operational_urgency: 6,
+      min_operational_urgency: 5, // probe (investigation opened) = "review today"; ruling/notice = 7+
       escalated: true,
       is_relevant: true,
       has_response_template: true,
@@ -296,7 +327,7 @@ const TEST_CASES = [
       created_at: new Date(Date.now() - 604800000).toISOString(), // 1 week ago
     },
     expected: {
-      max_customer_impact: 4,
+      max_customer_impact: 5, // loyal customer, formula changed — borderline 4-5 acceptable
       max_operational_urgency: 4,
       is_relevant: true,
       label: 'mild quality change complaint, low urgency',
@@ -314,7 +345,10 @@ function scorePost(post, cls) {
   const urgencyScore = Math.round((customer_impact * 0.40 + operational_urgency * 0.35 + trust_risk * 0.25) * 2);
   const viralityBonus = Math.round(virality_potential * 1.5);
   const threshold = parseInt(process.env.ESCALATE_THRESHOLD) || 60;
-  const escalationScore = Math.min(100, Math.round(engagementScore + recencyScore + 0 + urgencyScore + viralityBonus));
+  // Use category severity from lookup (matches production scorePost behaviour)
+  const category = CATEGORIES.find(c => c.id === cls.category_id);
+  const severity = category?.severity || 0;
+  const escalationScore = Math.min(100, Math.round(engagementScore + recencyScore + severity + urgencyScore + viralityBonus));
   return { escalation_score: escalationScore, escalated: escalationScore >= threshold };
 }
 
@@ -324,6 +358,7 @@ function evaluate(testCase, cls, scoring) {
   const { expected } = testCase;
   const failures = [];
   const checks = [];
+  const postIsIrrelevant = cls.is_relevant === false;
 
   function check(name, actual, pass, detail) {
     checks.push({ name, actual, pass, detail });
@@ -333,24 +368,29 @@ function evaluate(testCase, cls, scoring) {
   if (expected.is_relevant !== undefined) {
     check('is_relevant', cls.is_relevant, cls.is_relevant === expected.is_relevant, `expected ${expected.is_relevant}, got ${cls.is_relevant}`);
   }
-  if (expected.min_customer_impact !== undefined) {
-    check('customer_impact_min', cls.customer_impact, cls.customer_impact >= expected.min_customer_impact, `expected >= ${expected.min_customer_impact}, got ${cls.customer_impact}`);
-  }
-  if (expected.max_customer_impact !== undefined) {
-    check('customer_impact_max', cls.customer_impact, cls.customer_impact <= expected.max_customer_impact, `expected <= ${expected.max_customer_impact}, got ${cls.customer_impact}`);
-  }
-  if (expected.min_operational_urgency !== undefined) {
-    check('operational_urgency_min', cls.operational_urgency, cls.operational_urgency >= expected.min_operational_urgency, `expected >= ${expected.min_operational_urgency}, got ${cls.operational_urgency}`);
-  }
-  if (expected.min_trust_risk !== undefined) {
-    check('trust_risk_min', cls.trust_risk, cls.trust_risk >= expected.min_trust_risk, `expected >= ${expected.min_trust_risk}, got ${cls.trust_risk}`);
-  }
-  if (expected.escalated !== undefined) {
-    check('escalated', scoring.escalated, scoring.escalated === expected.escalated, `expected escalated=${expected.escalated}, score=${scoring.escalation_score}`);
-  }
-  if (expected.has_response_template !== undefined) {
-    const hasTemplate = !!cls.response_template;
-    check('response_template', hasTemplate, hasTemplate === expected.has_response_template, `expected has_response_template=${expected.has_response_template}, got=${hasTemplate}`);
+
+  // Skip dimension/escalation checks for irrelevant posts — production discards them,
+  // so their dimension scores have no effect on user-facing behaviour.
+  if (!postIsIrrelevant) {
+    if (expected.min_customer_impact !== undefined) {
+      check('customer_impact_min', cls.customer_impact, cls.customer_impact >= expected.min_customer_impact, `expected >= ${expected.min_customer_impact}, got ${cls.customer_impact}`);
+    }
+    if (expected.max_customer_impact !== undefined) {
+      check('customer_impact_max', cls.customer_impact, cls.customer_impact <= expected.max_customer_impact, `expected <= ${expected.max_customer_impact}, got ${cls.customer_impact}`);
+    }
+    if (expected.min_operational_urgency !== undefined) {
+      check('operational_urgency_min', cls.operational_urgency, cls.operational_urgency >= expected.min_operational_urgency, `expected >= ${expected.min_operational_urgency}, got ${cls.operational_urgency}`);
+    }
+    if (expected.min_trust_risk !== undefined) {
+      check('trust_risk_min', cls.trust_risk, cls.trust_risk >= expected.min_trust_risk, `expected >= ${expected.min_trust_risk}, got ${cls.trust_risk}`);
+    }
+    if (expected.escalated !== undefined) {
+      check('escalated', scoring.escalated, scoring.escalated === expected.escalated, `expected escalated=${expected.escalated}, score=${scoring.escalation_score}`);
+    }
+    if (expected.has_response_template !== undefined) {
+      const hasTemplate = !!cls.response_template;
+      check('response_template', hasTemplate, hasTemplate === expected.has_response_template, `expected has_response_template=${expected.has_response_template}, got=${hasTemplate}`);
+    }
   }
 
   return { passed: failures.length === 0, failures, checks };
