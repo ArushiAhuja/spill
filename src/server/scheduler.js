@@ -23,10 +23,13 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
   if (!posts.length || !process.env.OPENAI_API_KEY) return [];
 
   const operationalContext = [
-    intel.productKeywords?.length ? `Products/services: ${intel.productKeywords.slice(0, 5).join(', ')}` : '',
-    intel.customerPainPoints?.length ? `Known customer pain points: ${intel.customerPainPoints.slice(0, 5).join(', ')}` : '',
-    intel.highRiskTopics?.length ? `High-risk topics for this company: ${intel.highRiskTopics.slice(0, 4).join(', ')}` : '',
-    contextQueries.length ? `Industry context: ${contextQueries.slice(0, 4).join(' / ')}` : '',
+    intel.icpDescription ? `Target customers: ${intel.icpDescription}` : '',
+    intel.productKeywords?.length ? `Products/services: ${intel.productKeywords.slice(0, 6).join(', ')}` : '',
+    intel.typicalComplaints?.length ? `Typical complaints: ${intel.typicalComplaints.slice(0, 6).join('; ')}` : '',
+    intel.customerPainPoints?.length ? `Customer pain points: ${intel.customerPainPoints.slice(0, 5).join(', ')}` : '',
+    intel.highRiskTopics?.length ? `High-risk topics: ${intel.highRiskTopics.slice(0, 4).join(', ')}` : '',
+    intel.industryVocabulary?.length ? `Industry terminology: ${intel.industryVocabulary.slice(0, 6).join(', ')}` : '',
+    contextQueries.length ? `Industry context terms: ${contextQueries.slice(0, 4).join(' / ')}` : '',
   ].filter(Boolean).join('\n');
 
   const BATCH = 20;
@@ -42,19 +45,19 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
       } else {
         sourceLabel = p.source || 'web';
       }
-      const text = `${p.title || ''}${p.body ? ': ' + p.body.slice(0, 100) : ''}`.trim();
+      const text = `${p.title || ''}${p.body ? ': ' + p.body.slice(0, 120) : ''}`.trim();
       return `[${idx}] [${sourceLabel}] — ${text}`;
     }).join('\n');
 
     try {
       const res = await getOpenAI().chat.completions.create({
         model: 'gpt-4o-mini',
-        max_tokens: 60,
+        max_tokens: 80,
         temperature: 0,
         messages: [
           {
             role: 'system',
-            content: 'You are an operational intelligence filter for a company monitoring system. Return ONLY a comma-separated list of 0-based indexes, or the word "none". No explanation.',
+            content: 'You are an operational intelligence filter. Return ONLY a JSON array of relevant 0-based indexes, or an empty array. No explanation. Example: [0,2,5] or []',
           },
           {
             role: 'user',
@@ -62,36 +65,41 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
 Description: ${orgDescription || orgName}
 ${operationalContext}
 ${feedbackContext ? `\nLearned exclusions from past feedback:\n${feedbackContext}\n` : ''}
-Posts below come from Reddit, Hacker News, Google News, Twitter, and app store reviews. Some matched keyword filters but may not be genuinely about this company. Your job is to verify each one actually matters.
+Posts come from Reddit, Hacker News, Google News, Twitter, and app store reviews. Some matched keyword filters but may not be genuinely about this company. Verify each one actually matters to this company's operations or reputation.
 
 Include a post ONLY if it:
 - Directly mentions or is clearly about this company, its products, or its services
-- Discusses customer pain, complaints, or frustrations about this company specifically
-- Covers operational failures (refunds, service quality, safety, delays) involving this company
+- Discusses customer experience (positive or negative) with this company specifically
+- Covers operational failures — refunds, service quality, safety, delays, fraud — involving this company
 - Reports industry events, regulations, or competitor moves that would concern this company's leadership
 - Contains purchasing intent, reviews, or comparisons that involve this company
 
 Exclude if:
-- The company name appears only incidentally or in an unrelated context
-- It's about a different company or industry with no connection
-- It's generic content that happens to share a keyword (same word, different meaning)
-- It's a different country/geography with no operational relevance to this company
-- It's personal/lifestyle content with no commercial signal
+- The company name or keyword appears only incidentally or in an unrelated context
+- It's about a different company or industry with no connection to this one
+- It's generic content that happens to share a keyword but is about something else entirely
+- It's from a geography with no operational relevance to this company
+- It's personal or lifestyle content with no commercial signal
 
 Posts:
 ${postList}
 
-Relevant indexes (or "none"):`,
+Return JSON array of relevant indexes (e.g. [0,2,5]) or [] if none:`,
           },
         ],
       });
 
-      const text = res.choices[0].message.content.trim().toLowerCase();
-      if (text !== 'none') {
-        const idxs = text.split(',')
-          .map(s => parseInt(s.trim(), 10))
-          .filter(n => !isNaN(n) && n >= 0 && n < batch.length);
-        for (const idx of idxs) kept.push(batch[idx]);
+      const raw = res.choices[0].message.content.trim();
+      const match = raw.match(/\[[\s\S]*?\]/);
+      if (match) {
+        const idxs = JSON.parse(match[0]);
+        if (Array.isArray(idxs)) {
+          for (const idx of idxs) {
+            if (Number.isInteger(idx) && idx >= 0 && idx < batch.length) {
+              kept.push(batch[idx]);
+            }
+          }
+        }
       }
     } catch (err) {
       console.warn('[relevance] AI filter error, dropping tier3 batch:', err.message);
@@ -375,20 +383,20 @@ export async function runOrgCycle(orgId) {
       post.partner_name = matchedPartner || null
     }
 
-    const noCategories = p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'no categories configured', escalated: false, response_template: null, is_relevant: true });
+    const noCategories = p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, escalation_dimensions: null, reasoning: 'no categories configured', escalated: false, response_template: null, is_relevant: true });
 
     let classifiedDirect;
     try {
       classifiedDirect = categories.length > 0 && newDirect.length > 0
-        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description)
+        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel)
         : newDirect.map(noCategories);
     } catch (err) {
       console.warn('[scheduler] classifyPosts failed for tier1+tier2, storing keyword-matched posts with score 0:', err.message);
-      classifiedDirect = newDirect.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, reasoning: 'keyword match', escalated: false, response_template: null, is_relevant: true }));
+      classifiedDirect = newDirect.map(p => ({ ...p, category_id: null, escalation_score: 0, sentiment_intensity: 0, escalation_dimensions: null, reasoning: 'keyword match', escalated: false, response_template: null, is_relevant: true }));
     }
 
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
-      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description)
+      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel)
       : newTier3.map(noCategories);
 
     // Drop posts the classifier flagged as not genuinely about this company.
@@ -405,8 +413,8 @@ export async function runOrgCycle(orgId) {
     for (const post of classified) {
       try {
         const { rows: [inserted] } = await query(
-          `INSERT INTO posts (org_id, source, external_id, title, body, author, url, raw_engagement, escalation_score, category_id, sentiment_intensity, reasoning, escalated, post_created_at, is_competitor, competitor_name, is_influencer, response_template, location_tag, is_partner, partner_name, follower_count)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+          `INSERT INTO posts (org_id, source, external_id, title, body, author, url, raw_engagement, escalation_score, category_id, sentiment_intensity, reasoning, escalated, post_created_at, is_competitor, competitor_name, is_influencer, response_template, location_tag, is_partner, partner_name, follower_count, escalation_dimensions)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
            ON CONFLICT (org_id, source, external_id) DO NOTHING
            RETURNING id`,
           [
@@ -418,6 +426,7 @@ export async function runOrgCycle(orgId) {
             post.is_influencer || false, post.response_template || null,
             post.location_tag || null, post.is_partner || false,
             post.partner_name || null, post.follower_count || null,
+            post.escalation_dimensions ? JSON.stringify(post.escalation_dimensions) : null,
           ]
         );
         // Attach DB id to post for downstream use

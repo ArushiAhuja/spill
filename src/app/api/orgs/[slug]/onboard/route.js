@@ -193,11 +193,16 @@ Generate a JSON response with this EXACT structure (no markdown, no explanation,
     "brandKeywords": ["exact brand names people use when discussing this company"],
     "productKeywords": ["specific services/products this company offers"],
     "customerPainPoints": ["common complaint vocabulary customers use"],
+    "typicalComplaints": ["recurring complaint patterns stated as short phrases, e.g. 'refund not processed', 'booking cancelled last minute'"],
     "operationalRiskQueries": ["searches that would surface operational failures for this type of company"],
     "customerIntentQueries": ["what potential/current customers search when looking for or discussing this company's services"],
     "highRiskTopics": ["industry-specific risk terms — regulatory issues, safety concerns, fraud patterns"],
-    "geographyTerms": ["city/country terms relevant to this company"],
-    "exclusionTerms": ["words that when present indicate the post is NOT about this company (e.g. homonyms, unrelated brands with same name)"]
+    "industryVocabulary": ["technical or industry-specific terms this company uses, that would appear in relevant posts"],
+    "geographyTerms": ["city/country terms relevant to this company's operations"],
+    "exclusionTerms": ["words that when present indicate the post is NOT about this company (e.g. homonyms, unrelated brands with same name)"],
+    "icpDescription": "one sentence describing the ideal customer: who they are, what they need, and why they come to this company",
+    "brandVoice": "one sentence describing how the company communicates publicly: tone, personality, and approach to customer issues",
+    "competitorContext": "one sentence naming the main competitors and how this company is positioned differently"
   }
 }
 
@@ -219,11 +224,16 @@ Rules for intel_profile:
 - brandKeywords: 2-5 exact phrases/names (include common misspellings, short names)
 - productKeywords: 3-8 specific product/service terms (e.g. for aviation academy: "cadet pilot program", "CPL training", "DGCA ground school")
 - customerPainPoints: 5-10 complaint phrases customers use (e.g. "refund not received", "placement not delivered")
+- typicalComplaints: 5-10 recurring complaint patterns as short verb phrases (e.g. "refund not processed after 30 days", "customer care not reachable", "app crashes on payment")
 - operationalRiskQueries: 5-8 searches that find relevant failures (e.g. for aviation: "aviation academy scam india", "pilot training fraud india")
 - customerIntentQueries: 5-8 what customers search (e.g. "best pilot training india cost", "aviation academy review")
 - highRiskTopics: 3-6 regulatory/safety/fraud terms (e.g. "DGCA violation", "license fraud")
+- industryVocabulary: 4-8 technical/industry terms that appear in relevant posts but not in general conversation (e.g. for fintech: "UPI", "NBFC", "KYC", "AML")
 - geographyTerms: 2-4 geographic terms (city, country, region)
 - exclusionTerms: 1-5 words that indicate false positives (e.g. if company is "Chimes", exclude posts with "wind chimes", "door chimes" context)
+- icpDescription: ONE sentence — who their ideal customer is, what they need, and why they choose this company (e.g. "Young Indian professionals seeking hassle-free international travel bookings with reliable customer support")
+- brandVoice: ONE sentence — tone and approach for public communications (e.g. "Empathetic and solution-focused; we acknowledge issues quickly, take ownership, and follow up with resolution timelines")
+- competitorContext: ONE sentence — main competitors and this company's differentiation (e.g. "Competes with MakeMyTrip and Cleartrip; differentiated by lowest-price guarantee and 24/7 human support")
 
 Be specific to this company's actual industry. Think like an ops lead at this company — what internet conversations would they want to know about?`;
 

@@ -134,11 +134,12 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
     }
 
     // 60-day rolling window — ensures stale terms are not perpetuated
-    const [feedbackResult, savedResult] = await Promise.all([
+    const [feedbackResult, savedResult, categoryFeedbackResult] = await Promise.all([
       query(
-        `SELECT f.label, f.explanation, f.signal_type, p.title
+        `SELECT f.label, f.explanation, f.signal_type, p.title, c.name as category_name
          FROM post_feedback f
          LEFT JOIN posts p ON p.id = f.post_id
+         LEFT JOIN categories c ON c.id = p.category_id
          WHERE f.org_id = $1 AND f.label IS NOT NULL
            AND f.created_at > NOW() - INTERVAL '60 days'
          ORDER BY f.created_at DESC
@@ -152,6 +153,19 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
          WHERE p.org_id = $1 AND p.saved_at IS NOT NULL
            AND p.saved_at > NOW() - INTERVAL '60 days'
          ORDER BY p.saved_at DESC LIMIT 30`,
+        [orgId]
+      ),
+      // Count feedback by category to detect which categories are consistently wrong
+      query(
+        `SELECT c.name as category_name, f.label, COUNT(*) as cnt
+         FROM post_feedback f
+         LEFT JOIN posts p ON p.id = f.post_id
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE f.org_id = $1 AND f.label IS NOT NULL AND c.name IS NOT NULL
+           AND f.created_at > NOW() - INTERVAL '60 days'
+         GROUP BY c.name, f.label
+         ORDER BY cnt DESC
+         LIMIT 40`,
         [orgId]
       ),
     ]);
@@ -171,18 +185,47 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
       ...savedResult.rows.slice(0, 15).map(r => [r.category_name, r.title?.slice(0, 80)].filter(Boolean).join(' — ')),
     ].filter(Boolean).map((t, i) => `${i + 1}. ${t}`).join('\n');
 
+    // Summarize category-level feedback patterns for the AI
+    const categoryPatterns = {};
+    for (const row of categoryFeedbackResult.rows) {
+      if (!row.category_name) continue;
+      if (!categoryPatterns[row.category_name]) categoryPatterns[row.category_name] = { negative: 0, positive: 0 };
+      if (NEGATIVE_LABELS.has(row.label)) categoryPatterns[row.category_name].negative += parseInt(row.cnt);
+      if (POSITIVE_LABELS.has(row.label)) categoryPatterns[row.category_name].positive += parseInt(row.cnt);
+    }
+    const categoryContext = Object.entries(categoryPatterns)
+      .filter(([, v]) => v.negative > 2 || v.positive > 2)
+      .map(([name, v]) => `"${name}": ${v.positive} positive signals, ${v.negative} negative signals`)
+      .join('; ');
+
     const res = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
-      max_tokens: 300,
+      max_tokens: 500,
       temperature: 0,
       messages: [
         {
           role: 'system',
-          content: 'Extract keyword patterns from brand monitoring feedback. Return ONLY valid JSON.',
+          content: 'Extract content filtering rules and category quality signals from brand monitoring feedback. Return ONLY valid JSON.',
         },
         {
           role: 'user',
-          content: `Based on this user feedback, extract content filtering rules.\n\n${negativeFeedback ? `Posts users marked irrelevant:\n${negativeFeedback}\n` : ''}${positiveFeedback ? `\nPosts users found valuable / saved:\n${positiveFeedback}` : ''}\n\nReturn: {"exclude": ["phrase 1", ...], "boost": ["phrase 1", ...]}\n\n- exclude: 2–8 short phrases (2–4 words) for topics consistently irrelevant to this company\n- boost: 2–6 short phrases for high-value topics this company cares about\n- Only include phrases with clear pattern — return [] if no strong signal\n- No generic words like "content" or "posts"`,
+          content: `Based on this user feedback for a brand monitoring system, extract filtering rules and category insights.
+
+${negativeFeedback ? `Posts users marked as not relevant or wrong:\n${negativeFeedback}\n` : ''}${positiveFeedback ? `\nPosts users found valuable or saved:\n${positiveFeedback}\n` : ''}${categoryContext ? `\nCategory feedback patterns: ${categoryContext}\n` : ''}
+Return:
+{
+  "exclude": ["phrase 1", ...],
+  "boost": ["phrase 1", ...],
+  "typicalComplaints": ["complaint pattern 1", ...],
+  "categorySignals": {"category name": "increase" | "decrease" | "stable"}
+}
+
+Rules:
+- exclude: 2-8 short phrases (2-4 words) for topics consistently irrelevant to this company. Return [] if no pattern.
+- boost: 2-6 short phrases for high-signal topics this company cares about. Return [] if no pattern.
+- typicalComplaints: 3-8 complaint patterns extracted from the negative feedback (short verb phrases like "refund not processed", "app crashes on checkout"). Return [] if no pattern.
+- categorySignals: for each category with a strong signal (>3 instances), note whether severity should increase, decrease, or is stable. Only include categories with a clear signal.
+- No generic words like "content" or "posts" in any list.`,
         },
       ],
     });
@@ -196,21 +239,51 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
     // Normalise, deduplicate, cap — replace not merge to prevent drift
     const newExclusions = Array.isArray(parsed.exclude)
       ? [...new Set(parsed.exclude.filter(t => typeof t === 'string' && t.trim().length >= 3).map(t => t.toLowerCase().trim()))].slice(0, 15)
-      : [];
+      : (intel.exclusionTerms || []);
+
     const newBoosts = Array.isArray(parsed.boost)
       ? [...new Set(parsed.boost.filter(t => typeof t === 'string' && t.trim().length >= 3).map(t => t.toLowerCase().trim()))].slice(0, 15)
-      : [];
+      : (intel.boostTerms || []);
+
+    const newTypicalComplaints = Array.isArray(parsed.typicalComplaints)
+      ? [...new Set(parsed.typicalComplaints.filter(t => typeof t === 'string' && t.trim().length >= 5).map(t => t.trim()))].slice(0, 15)
+      : (intel.typicalComplaints || []);
+
+    const categorySignals = parsed.categorySignals && typeof parsed.categorySignals === 'object'
+      ? parsed.categorySignals
+      : {};
+
+    // Apply category severity adjustments based on feedback signal
+    if (Object.keys(categorySignals).length > 0) {
+      const { rows: categories } = await query(
+        'SELECT id, name, severity FROM categories WHERE org_id = $1',
+        [orgId]
+      );
+      for (const cat of categories) {
+        const signal = categorySignals[cat.name];
+        if (!signal) continue;
+        const delta = signal === 'increase' ? 3 : signal === 'decrease' ? -3 : 0;
+        if (delta !== 0) {
+          const newSeverity = Math.min(30, Math.max(0, (cat.severity || 10) + delta));
+          await query(
+            'UPDATE categories SET severity = $1 WHERE id = $2',
+            [newSeverity, cat.id]
+          ).catch(() => {});
+        }
+      }
+    }
 
     await query(
       `UPDATE organizations SET intel_profile = COALESCE(intel_profile, '{}')::jsonb || $1::jsonb WHERE id = $2`,
       [JSON.stringify({
         exclusionTerms: newExclusions,
         boostTerms: newBoosts,
+        typicalComplaints: newTypicalComplaints,
         feedbackUpdatedAt: new Date().toISOString(),
       }), orgId]
     );
 
-    console.log(`[feedback] org ${orgId} intelligence updated — exclusions: [${newExclusions.join(', ')}] | boosts: [${newBoosts.join(', ')}]`);
+    console.log(`[feedback] org ${orgId} intelligence updated — exclusions: [${newExclusions.join(', ')}] | boosts: [${newBoosts.join(', ')}] | complaints: [${newTypicalComplaints.slice(0, 3).join(', ')}]`);
   } catch (err) {
     console.warn('[feedback] intelligence update failed:', err.message);
   }

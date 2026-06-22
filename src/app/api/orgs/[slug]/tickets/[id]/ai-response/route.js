@@ -43,12 +43,17 @@ export async function POST(request, { params }) {
     const openai = new OpenAI({ apiKey });
 
     const toneDesc = PERSONALITIES[personality] || PERSONALITIES.professional;
-    const brandContext = ticket.intel_profile?.brandVoice || '';
+    const intel = ticket.intel_profile || {};
+    const brandContext = intel.brandVoice || '';
+    const icpContext = intel.icpDescription || '';
+    const typicalComplaints = intel.typicalComplaints?.slice(0, 5).join('; ') || '';
     const previousNotes = notes.filter(n => !n.is_internal).map(n => n.body).join('\n---\n');
 
     const systemPrompt = `You are a social media customer support agent for ${ticket.org_name}.
 ${ticket.org_description ? `About the company: ${ticket.org_description}` : ''}
+${icpContext ? `Who our customers are: ${icpContext}` : ''}
 ${brandContext ? `Brand voice: ${brandContext}` : ''}
+${typicalComplaints ? `Common issues we handle: ${typicalComplaints}` : ''}
 Tone: ${toneDesc}
 ${instructions ? `Special instructions: ${instructions}` : ''}
 

@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 16;
+const MIGRATION_VERSION = 17;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -308,6 +308,9 @@ export async function ensureMigrations() {
 
   // Distinguish implicit signals (save/dismiss actions) from explicit feedback (feedback panel)
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS signal_type TEXT DEFAULT 'explicit'`);
+
+  // Escalation Engine V2: per-dimension scoring (customer_impact, operational_urgency, trust_risk, virality_potential)
+  await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS escalation_dimensions JSONB`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`
