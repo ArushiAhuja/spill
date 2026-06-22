@@ -2,13 +2,15 @@
 // Strategy 1: Google News RSS — "{brand} linkedin"         (news mentioning LinkedIn — always works)
 // Strategy 2: Google News RSS — site:linkedin.com/pulse    (indexed LinkedIn Pulse articles — always works)
 // Strategy 3: Apify harvestapi~linkedin-post-search        (actual post text — needs li_at cookie in credentials)
-// Strategy 4: Direct scrape of LinkedIn company page       (best-effort JSON-LD, often gated)
+// Strategy 4: Firecrawl scrape of LinkedIn company page    (best-effort, often gated — needs FIRECRAWL_API_KEY)
+// Strategy 5: Direct scrape of LinkedIn company page       (fallback JSON-LD, often gated)
 //
 // company_handles config is OPTIONAL — enriches Apify and enables direct page scraping.
 // Strategies 1 & 2 work with just a brand name query, no auth required.
 
 import { createHash } from 'crypto';
 import Parser from 'rss-parser';
+import { firecrawlScrape, getFirecrawlKey } from './firecrawl.js';
 
 const TIMEOUT_MS = 12_000;
 
@@ -129,7 +131,67 @@ async function fetchViaGoogleNews(queries) {
   return results;
 }
 
-// ── Strategy 4: Direct public company page scrape ─────────────────────────────
+// ── Strategy 4: Firecrawl — company page posts ───────────────────────────────
+function parseLinkedInMarkdown(markdown, handle) {
+  const posts = [];
+  const seen = new Set();
+  const sections = markdown.split(/\n{2,}/);
+
+  for (const section of sections) {
+    const text = section
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/[#*_`>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (text.length < 40) continue;
+    if (/sign in|join now|followers|employees|follow|linkedin/i.test(text) && text.length < 100) continue;
+    if (seen.has(text)) continue;
+    seen.add(text);
+
+    posts.push({
+      id: makeId(`fc_${handle}_${text.slice(0, 80)}`),
+      source: 'linkedin',
+      author: handle,
+      title: text.length > 160 ? text.slice(0, 160) + '…' : text,
+      body: text,
+      url: `https://www.linkedin.com/company/${handle}/posts/`,
+      score: 0,
+      created_at: new Date(),
+    });
+
+    if (posts.length >= 5) break;
+  }
+  return posts;
+}
+
+async function fetchViaFirecrawl(companyHandles, apiKey) {
+  const results = [];
+  for (const handle of companyHandles.slice(0, 3)) {
+    const urls = [
+      `https://www.linkedin.com/company/${handle}/posts/`,
+      `https://www.linkedin.com/company/${handle}/`,
+    ];
+    for (const url of urls) {
+      try {
+        const markdown = await firecrawlScrape(url, apiKey, { waitFor: 3000 });
+        if (!markdown || markdown.length < 200) continue;
+        const posts = parseLinkedInMarkdown(markdown, handle);
+        if (posts.length) {
+          results.push(...posts);
+          console.log(`[linkedin] firecrawl ${handle}: ${posts.length} posts`);
+          break;
+        }
+      } catch (err) {
+        console.warn(`[linkedin] firecrawl ${handle} failed:`, err.message);
+      }
+    }
+  }
+  return results;
+}
+
+// ── Strategy 5: Direct public company page scrape ─────────────────────────────
 async function fetchViaDirectScrape(companyHandles) {
   const results = [];
 
@@ -230,7 +292,18 @@ export async function fetchLinkedIn({ config = {}, credentials = {} } = {}) {
     }
   }
 
-  // Strategy 4: Direct company page (only if handles configured)
+  // Strategy 4: Firecrawl company page (only if handles + API key configured)
+  const fcKey = getFirecrawlKey(credentials);
+  if (fcKey && companyHandles.length) {
+    try {
+      const posts = await fetchViaFirecrawl(companyHandles, fcKey);
+      addUnique(posts);
+    } catch (err) {
+      console.warn('[linkedin] Firecrawl failed:', err.message);
+    }
+  }
+
+  // Strategy 5: Direct company page fallback (only if handles configured)
   if (companyHandles.length) {
     const posts = await fetchViaDirectScrape(companyHandles);
     addUnique(posts);

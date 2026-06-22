@@ -9,14 +9,19 @@ const LABEL_META = {
   not_relevant:        { label: 'not relevant',       color: '#f87171', group: 'excluded' },
   wrong_geography:     { label: 'wrong geography',    color: '#f87171', group: 'excluded' },
   unrelated_complaint: { label: 'unrelated',          color: '#f87171', group: 'excluded' },
-  too_generic:         { label: 'too generic',        color: '#f59e0b', group: 'excluded' },
+  too_generic:         { label: 'too generic',        color: '#f87171', group: 'excluded' },
   duplicate:           { label: 'duplicate',          color: '#64748b', group: 'excluded' },
+  false_positive:      { label: 'false positive',     color: '#f87171', group: 'excluded' },
+  wrong_category:      { label: 'wrong category',     color: '#a78bfa', group: 'corrections' },
+  missed_category:     { label: 'missed category',    color: '#a78bfa', group: 'corrections' },
+  wrong_severity:      { label: 'wrong severity',     color: '#f59e0b', group: 'corrections' },
+  missed_context:      { label: 'missed context',     color: '#a78bfa', group: 'boosted' },
   useful:              { label: 'useful',             color: '#4ade80', group: 'boosted' },
   high_signal:         { label: 'high signal',        color: '#3b82f6', group: 'boosted' },
-  missed_category:     { label: 'missed category',    color: '#a78bfa', group: 'corrections' },
 }
 
-const EXCLUDED_LABELS = ['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate']
+const EXCLUDED_LABELS = new Set(['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'false_positive'])
+const CORRECTION_LABELS = new Set(['wrong_category', 'missed_category', 'wrong_severity'])
 
 const SOURCE_COLORS = {
   reddit: '#f87171', hackernews: '#3b82f6', google_news: '#4ade80',
@@ -49,6 +54,48 @@ function StatusBadge({ status }) {
     <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 99, background: `${c}18`, border: `1px solid ${c}44`, color: c, fontFamily: 'var(--font-mono)' }}>
       {status}
     </span>
+  )
+}
+
+function AdjustmentBadge({ text }) {
+  if (!text) return null
+  return (
+    <span style={{ fontSize: 10, color: '#3b82f6', fontStyle: 'italic', fontFamily: 'var(--font-mono)' }}>
+      → {text}
+    </span>
+  )
+}
+
+function AiDecisionSnippet({ item }) {
+  if (!item.escalation_score && !item.category_name && !item.ai_reasoning) return null
+  return (
+    <div style={{ marginTop: 6, padding: '6px 10px', background: 'rgba(59,130,246,0.04)', border: '1px solid rgba(59,130,246,0.1)', borderRadius: 6 }}>
+      <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4, fontFamily: 'var(--font-mono)' }}>
+        AI decision
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' }}>
+        {item.category_name && (
+          <span style={{ fontSize: 11, color: '#64748b' }}>
+            category: <span style={{ color: '#94a3b8' }}>{item.category_name}</span>
+          </span>
+        )}
+        {item.escalation_score !== null && item.escalation_score !== undefined && (
+          <span style={{ fontSize: 11, color: '#64748b' }}>
+            score: <span style={{ color: item.escalation_score >= 60 ? '#f59e0b' : '#94a3b8' }}>{item.escalation_score}</span>
+            {item.severity_direction && (
+              <span style={{ color: '#334155', fontSize: 10, marginLeft: 4 }}>
+                ({item.severity_direction === 'lower' ? 'was too high' : 'was too low'})
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+      {item.ai_reasoning && (
+        <div style={{ fontSize: 11, color: '#334155', lineHeight: 1.4, marginTop: 4, fontStyle: 'italic' }}>
+          {item.ai_reasoning.length > 160 ? item.ai_reasoning.slice(0, 160) + '…' : item.ai_reasoning}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -128,6 +175,9 @@ export default function FeedbackHistoryPage({ params }) {
   const [filter, setFilter] = useState('all')
   const [exclusionTerms, setExclusionTerms] = useState([])
   const [boostTerms, setBoostTerms] = useState([])
+  const [typicalComplaints, setTypicalComplaints] = useState([])
+  const [overEscalationPatterns, setOverEscalationPatterns] = useState([])
+  const [underEscalationPatterns, setUnderEscalationPatterns] = useState([])
 
   const [editingId, setEditingId] = useState(null)
   const [deleteConfirmId, setDeleteConfirmId] = useState(null)
@@ -143,6 +193,9 @@ export default function FeedbackHistoryPage({ params }) {
       setPages(data.pages || 1)
       setExclusionTerms(data.exclusionTerms || [])
       setBoostTerms(data.boostTerms || [])
+      setTypicalComplaints(data.typicalComplaints || [])
+      setOverEscalationPatterns(data.overEscalationPatterns || [])
+      setUnderEscalationPatterns(data.underEscalationPatterns || [])
     } catch (err) {
       if (err.message === 'unauthorized') router.replace('/login')
       else setError(err.message || 'failed to load')
@@ -170,10 +223,13 @@ export default function FeedbackHistoryPage({ params }) {
     }
   }
 
+  const hasPatterns = exclusionTerms.length > 0 || boostTerms.length > 0 ||
+    typicalComplaints.length > 0 || overEscalationPatterns.length > 0 || underEscalationPatterns.length > 0
+
   const filterTabs = [
-    { key: 'all', label: 'all' },
-    { key: 'excluded', label: 'excluded' },
-    { key: 'boosted', label: 'boosted' },
+    { key: 'all',         label: 'all' },
+    { key: 'excluded',    label: 'excluded' },
+    { key: 'boosted',     label: 'boosted' },
     { key: 'corrections', label: 'corrections' },
   ]
 
@@ -196,32 +252,84 @@ export default function FeedbackHistoryPage({ params }) {
       </div>
 
       {/* Learned patterns banner */}
-      {(exclusionTerms.length > 0 || boostTerms.length > 0) && (
-        <div style={{ marginBottom: 24, padding: '12px 16px', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 10 }}>
+      {hasPatterns && (
+        <div style={{ marginBottom: 24, padding: '14px 16px', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 14 }}>
+
           {exclusionTerms.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>active exclusions — filtered every cycle</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: boostTerms.length > 0 ? 12 : 0 }}>
+            <div>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 7, fontFamily: 'var(--font-mono)' }}>
+                active exclusions — filtered every cycle
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                 {exclusionTerms.map((term, i) => (
                   <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontFamily: 'var(--font-mono)' }}>
                     −{term}
                   </span>
                 ))}
               </div>
-            </>
+            </div>
           )}
+
           {boostTerms.length > 0 && (
-            <>
-              <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>active boosts — prioritized every cycle</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <div>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 7, fontFamily: 'var(--font-mono)' }}>
+                active boosts — prioritized every cycle
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                 {boostTerms.map((term, i) => (
                   <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.25)', color: '#4ade80', fontFamily: 'var(--font-mono)' }}>
                     +{term}
                   </span>
                 ))}
               </div>
-            </>
+            </div>
           )}
+
+          {typicalComplaints.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 7, fontFamily: 'var(--font-mono)' }}>
+                known complaint patterns — used in classification
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                {typicalComplaints.map((p, i) => (
+                  <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontFamily: 'var(--font-mono)' }}>
+                    {p}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {overEscalationPatterns.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 7, fontFamily: 'var(--font-mono)' }}>
+                over-escalation patterns — severity scored lower
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                {overEscalationPatterns.map((p, i) => (
+                  <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: '#f59e0b', fontFamily: 'var(--font-mono)' }}>
+                    ↓{p}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {underEscalationPatterns.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 7, fontFamily: 'var(--font-mono)' }}>
+                under-escalation patterns — severity scored higher
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                {underEscalationPatterns.map((p, i) => (
+                  <span key={i} style={{ fontSize: 11, padding: '2px 9px', borderRadius: 99, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#3b82f6', fontFamily: 'var(--font-mono)' }}>
+                    ↑{p}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
         </div>
       )}
 
@@ -280,7 +388,8 @@ export default function FeedbackHistoryPage({ params }) {
             const isDeleteConfirm = deleteConfirmId === item.id
             const meta = LABEL_META[item.label]
             const srcColor = SOURCE_COLORS[item.post_source] || '#64748b'
-            const isExcluded = EXCLUDED_LABELS.includes(item.label)
+            const isExcluded = EXCLUDED_LABELS.has(item.label)
+            const isCorrection = CORRECTION_LABELS.has(item.label)
 
             return (
               <div
@@ -331,23 +440,25 @@ export default function FeedbackHistoryPage({ params }) {
                       </div>
                     )}
 
+                    {/* AI decision snippet */}
+                    <AiDecisionSnippet item={item} />
+
                     {/* Meta row */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
                       <span style={{ fontSize: 11, color: '#334155', fontFamily: 'var(--font-mono)' }}>
                         {timeAgo(item.created_at)}
                       </span>
                       {item.post_status && item.post_status !== 'unread' && (
                         <StatusBadge status={item.post_status} />
                       )}
-                      {isExcluded && exclusionTerms.length > 0 && (
-                        <span style={{ fontSize: 10, color: '#f87171', fontFamily: 'var(--font-mono)' }}>
-                          exclusion active
-                        </span>
+                      {item.resulting_adjustment && (
+                        <AdjustmentBadge text={item.resulting_adjustment} />
                       )}
-                      {!isExcluded && item.label && (
-                        <span style={{ fontSize: 10, color: meta?.color || '#64748b', fontFamily: 'var(--font-mono)' }}>
-                          {item.label === 'missed_category' ? 'category corrected' : 'boost active'}
-                        </span>
+                      {!item.resulting_adjustment && isExcluded && exclusionTerms.length > 0 && (
+                        <span style={{ fontSize: 10, color: '#f87171', fontFamily: 'var(--font-mono)' }}>exclusion active</span>
+                      )}
+                      {!item.resulting_adjustment && !isExcluded && !isCorrection && item.label === 'high_signal' && (
+                        <span style={{ fontSize: 10, color: '#3b82f6', fontFamily: 'var(--font-mono)' }}>boost active</span>
                       )}
                     </div>
                   </div>

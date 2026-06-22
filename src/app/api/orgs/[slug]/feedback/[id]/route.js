@@ -23,8 +23,8 @@ export async function PATCH(request, { params }) {
 
     const { label, explanation } = await request.json();
 
-    const VALID_LABELS = ['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'useful', 'high_signal', 'missed_category'];
-    if (label !== undefined && !VALID_LABELS.includes(label)) {
+    const VALID_LABELS = new Set(['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'wrong_category', 'missed_category', 'wrong_severity', 'false_positive', 'missed_context', 'useful', 'high_signal']);
+    if (label !== undefined && !VALID_LABELS.has(label)) {
       return NextResponse.json({ error: 'invalid label' }, { status: 400 });
     }
 

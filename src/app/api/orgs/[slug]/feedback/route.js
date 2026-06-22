@@ -26,9 +26,9 @@ export async function GET(request, { params }) {
 
     if (labelFilter && labelFilter !== 'all') {
       const groups = {
-        excluded: ['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate'],
-        boosted: ['useful', 'high_signal'],
-        corrections: ['missed_category'],
+        excluded:    ['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'false_positive'],
+        boosted:     ['useful', 'high_signal', 'missed_context'],
+        corrections: ['wrong_category', 'missed_category', 'wrong_severity'],
       };
       const labels = groups[labelFilter];
       if (labels) {
@@ -49,9 +49,11 @@ export async function GET(request, { params }) {
 
     const { rows } = await query(
       `SELECT
-         f.id, f.post_id, f.label, f.explanation, f.field, f.old_value, f.new_value, f.created_at,
+         f.id, f.post_id, f.label, f.explanation, f.field, f.old_value, f.new_value,
+         f.severity_direction, f.resulting_adjustment, f.created_at,
          p.title as post_title, p.url as post_url, p.source as post_source,
-         p.post_status, p.escalation_score, p.category_id,
+         p.post_status, p.escalation_score, p.escalation_dimensions,
+         p.reasoning as ai_reasoning, p.category_id,
          c.name as category_name, c.color as category_color
        FROM post_feedback f
        LEFT JOIN posts p ON p.id = f.post_id
@@ -62,21 +64,23 @@ export async function GET(request, { params }) {
       [...values, limit, offset]
     );
 
-    // Also fetch current intel_profile so frontend can show which patterns are active
+    // Fetch current intel_profile so frontend can show active patterns
     const { rows: [org] } = await query(
       'SELECT intel_profile FROM organizations WHERE id = $1',
       [access.orgId]
     );
-    const exclusionTerms = org?.intel_profile?.exclusionTerms || [];
-    const boostTerms = org?.intel_profile?.boostTerms || [];
+    const intel = org?.intel_profile || {};
 
     return NextResponse.json({
       feedback: rows,
       total: parseInt(total, 10),
       page,
       pages: Math.ceil(parseInt(total, 10) / limit),
-      exclusionTerms,
-      boostTerms,
+      exclusionTerms: intel.exclusionTerms || [],
+      boostTerms: intel.boostTerms || [],
+      typicalComplaints: intel.typicalComplaints || [],
+      overEscalationPatterns: intel.overEscalationPatterns || [],
+      underEscalationPatterns: intel.underEscalationPatterns || [],
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });

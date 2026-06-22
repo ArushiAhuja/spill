@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../server/api-auth.js';
 
-const ALL_SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore', 'youtube'];
+const ALL_SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore', 'appstore', 'linkedin', 'instagram', 'youtube'];
 
 // GET /api/orgs/[slug]/sources
 export async function GET(request, { params }) {

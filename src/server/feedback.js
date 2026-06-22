@@ -7,8 +7,8 @@ function getOpenAI() {
   return _openai;
 }
 
-const NEGATIVE_LABELS = new Set(['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'dismissed']);
-const POSITIVE_LABELS = new Set(['useful', 'high_signal', 'missed_category', 'saved', 'good_match']);
+const NEGATIVE_LABELS = new Set(['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'dismissed', 'false_positive']);
+const POSITIVE_LABELS = new Set(['useful', 'high_signal', 'missed_category', 'wrong_category', 'missed_context', 'saved', 'good_match']);
 
 // Strip common PII patterns before including post content in training data or prompts.
 // Targets: email addresses, phone numbers, bare URLs.
@@ -136,7 +136,7 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
     // 60-day rolling window — ensures stale terms are not perpetuated
     const [feedbackResult, savedResult, categoryFeedbackResult] = await Promise.all([
       query(
-        `SELECT f.label, f.explanation, f.signal_type, p.title, c.name as category_name
+        `SELECT f.label, f.explanation, f.signal_type, f.severity_direction, p.title, c.name as category_name
          FROM post_feedback f
          LEFT JOIN posts p ON p.id = f.post_id
          LEFT JOIN categories c ON c.id = p.category_id
@@ -170,20 +170,43 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
       ),
     ]);
 
-    const negativeRows = feedbackResult.rows.filter(r => NEGATIVE_LABELS.has(r.label));
-    const positiveRows = feedbackResult.rows.filter(r => POSITIVE_LABELS.has(r.label));
+    const negativeRows = feedbackResult.rows.filter(r =>
+      NEGATIVE_LABELS.has(r.label) ||
+      (r.label === 'wrong_severity' && r.severity_direction === 'lower')
+    );
+    const positiveRows = feedbackResult.rows.filter(r =>
+      POSITIVE_LABELS.has(r.label) ||
+      (r.label === 'wrong_severity' && r.severity_direction === 'higher')
+    );
+    const falsePositiveRows = feedbackResult.rows.filter(r => r.label === 'false_positive');
+    const missedContextRows = feedbackResult.rows.filter(r => r.label === 'missed_context');
 
     if (!negativeRows.length && !positiveRows.length && !savedResult.rows.length) return;
 
     const negativeFeedback = negativeRows.slice(0, 30)
-      .map(r => anonymizeText(r.explanation || r.title || ''))
+      .map(r => {
+        const text = anonymizeText(r.explanation || r.title || '');
+        const prefix = r.label === 'false_positive' ? '[false positive] ' : r.label === 'wrong_severity' ? '[over-escalated] ' : '';
+        return prefix + text;
+      })
       .filter(Boolean)
       .map((t, i) => `${i + 1}. ${t}`).join('\n');
 
     const positiveFeedback = [
-      ...positiveRows.slice(0, 15).map(r => anonymizeText(r.explanation || r.title || '')),
+      ...positiveRows.slice(0, 15).map(r => {
+        const text = anonymizeText(r.explanation || r.title || '');
+        const prefix = r.label === 'missed_context' ? '[missed context] ' : r.label === 'wrong_severity' ? '[under-escalated] ' : '';
+        return prefix + text;
+      }),
       ...savedResult.rows.slice(0, 15).map(r => [r.category_name, r.title?.slice(0, 80)].filter(Boolean).join(' — ')),
     ].filter(Boolean).map((t, i) => `${i + 1}. ${t}`).join('\n');
+
+    const falsePositiveFeedback = falsePositiveRows.length
+      ? falsePositiveRows.slice(0, 10).map(r => anonymizeText(r.explanation || r.title || '')).filter(Boolean).map((t, i) => `${i + 1}. ${t}`).join('\n')
+      : '';
+    const missedContextFeedback = missedContextRows.length
+      ? missedContextRows.slice(0, 10).map(r => anonymizeText(r.explanation || r.title || '')).filter(Boolean).map((t, i) => `${i + 1}. ${t}`).join('\n')
+      : '';
 
     // Summarize category-level feedback patterns for the AI
     const categoryPatterns = {};
@@ -200,32 +223,35 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
 
     const res = await getOpenAI().chat.completions.create({
       model: 'gpt-4o-mini',
-      max_tokens: 500,
+      max_tokens: 600,
       temperature: 0,
       messages: [
         {
           role: 'system',
-          content: 'Extract content filtering rules and category quality signals from brand monitoring feedback. Return ONLY valid JSON.',
+          content: 'Extract content filtering rules and escalation signals from brand monitoring feedback. Return ONLY valid JSON.',
         },
         {
           role: 'user',
-          content: `Based on this user feedback for a brand monitoring system, extract filtering rules and category insights.
+          content: `Based on user feedback for a brand monitoring system, extract filtering rules, escalation signals, and category insights.
 
-${negativeFeedback ? `Posts users marked as not relevant or wrong:\n${negativeFeedback}\n` : ''}${positiveFeedback ? `\nPosts users found valuable or saved:\n${positiveFeedback}\n` : ''}${categoryContext ? `\nCategory feedback patterns: ${categoryContext}\n` : ''}
+${negativeFeedback ? `Posts marked irrelevant, over-escalated, or false positives:\n${negativeFeedback}\n` : ''}${positiveFeedback ? `\nPosts found valuable, under-escalated, or with missed context:\n${positiveFeedback}\n` : ''}${falsePositiveFeedback ? `\nFalse positive escalations (posts that escalated but shouldn't have):\n${falsePositiveFeedback}\n` : ''}${missedContextFeedback ? `\nMissed context (posts where AI misunderstood the significance):\n${missedContextFeedback}\n` : ''}${categoryContext ? `\nCategory feedback patterns: ${categoryContext}\n` : ''}
 Return:
 {
   "exclude": ["phrase 1", ...],
   "boost": ["phrase 1", ...],
   "typicalComplaints": ["complaint pattern 1", ...],
+  "escalationPatterns": {"over": ["phrase for posts that over-escalated"], "under": ["phrase for posts that under-escalated"]},
   "categorySignals": {"category name": "increase" | "decrease" | "stable"}
 }
 
 Rules:
-- exclude: 2-8 short phrases (2-4 words) for topics consistently irrelevant to this company. Return [] if no pattern.
-- boost: 2-6 short phrases for high-signal topics this company cares about. Return [] if no pattern.
-- typicalComplaints: 3-8 complaint patterns extracted from the negative feedback (short verb phrases like "refund not processed", "app crashes on checkout"). Return [] if no pattern.
-- categorySignals: for each category with a strong signal (>3 instances), note whether severity should increase, decrease, or is stable. Only include categories with a clear signal.
-- No generic words like "content" or "posts" in any list.`,
+- exclude: 2-8 short phrases (2-4 words) for content consistently irrelevant to this company. Return [] if no pattern.
+- boost: 2-6 short phrases for high-signal content this company should prioritize. Return [] if no pattern.
+- typicalComplaints: 3-8 complaint patterns from negative feedback (short verb phrases like "refund not processed"). Return [] if no pattern.
+- escalationPatterns.over: 0-5 phrases appearing in posts that were flagged as over-escalated or false positives. Return [] if no pattern.
+- escalationPatterns.under: 0-5 phrases appearing in posts that were under-escalated or had missed context. Return [] if no pattern.
+- categorySignals: categories with clear signal (>3 instances) — increase, decrease, or stable severity. Only include clear signals.
+- No generic words like "content" or "posts".`,
         },
       ],
     });
@@ -253,6 +279,14 @@ Rules:
       ? parsed.categorySignals
       : {};
 
+    // Escalation patterns inform future relevance filtering
+    const overEscalationPatterns = Array.isArray(parsed.escalationPatterns?.over)
+      ? [...new Set(parsed.escalationPatterns.over.filter(t => typeof t === 'string' && t.trim().length >= 3).map(t => t.toLowerCase().trim()))].slice(0, 8)
+      : (intel.overEscalationPatterns || []);
+    const underEscalationPatterns = Array.isArray(parsed.escalationPatterns?.under)
+      ? [...new Set(parsed.escalationPatterns.under.filter(t => typeof t === 'string' && t.trim().length >= 3).map(t => t.toLowerCase().trim()))].slice(0, 8)
+      : (intel.underEscalationPatterns || []);
+
     // Apply category severity adjustments based on feedback signal
     if (Object.keys(categorySignals).length > 0) {
       const { rows: categories } = await query(
@@ -279,11 +313,13 @@ Rules:
         exclusionTerms: newExclusions,
         boostTerms: newBoosts,
         typicalComplaints: newTypicalComplaints,
+        overEscalationPatterns,
+        underEscalationPatterns,
         feedbackUpdatedAt: new Date().toISOString(),
       }), orgId]
     );
 
-    console.log(`[feedback] org ${orgId} intelligence updated — exclusions: [${newExclusions.join(', ')}] | boosts: [${newBoosts.join(', ')}] | complaints: [${newTypicalComplaints.slice(0, 3).join(', ')}]`);
+    console.log(`[feedback] org ${orgId} intelligence updated — exclusions: [${newExclusions.join(', ')}] | boosts: [${newBoosts.join(', ')}] | complaints: [${newTypicalComplaints.slice(0, 3).join(', ')}] | over-escalation: [${overEscalationPatterns.slice(0, 2).join(', ')}]`);
   } catch (err) {
     console.warn('[feedback] intelligence update failed:', err.message);
   }

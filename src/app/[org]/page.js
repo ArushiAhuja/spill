@@ -155,32 +155,72 @@ function NoteEditor({ slug, post, onSave }) {
   )
 }
 
-const FEEDBACK_LABELS = [
-  { id: 'not_relevant',        label: 'not relevant to us',   neg: true },
-  { id: 'wrong_geography',     label: 'wrong geography',       neg: true },
-  { id: 'unrelated_complaint', label: 'unrelated complaint',   neg: true },
-  { id: 'too_generic',         label: 'too generic',           neg: true },
-  { id: 'duplicate',           label: 'duplicate',             neg: true },
-  { id: 'useful',              label: 'useful',                neg: false },
-  { id: 'high_signal',         label: 'high signal',           neg: false },
-  { id: 'missed_category',     label: 'missed category',       neg: false },
+// Grouped for clarity in the panel UI
+const FEEDBACK_LABEL_GROUPS = [
+  {
+    group: 'not relevant',
+    labels: [
+      { id: 'not_relevant',        label: 'not relevant',       neg: true },
+      { id: 'wrong_geography',     label: 'wrong geography',    neg: true },
+      { id: 'unrelated_complaint', label: 'unrelated',          neg: true },
+      { id: 'too_generic',         label: 'too generic',        neg: true },
+      { id: 'duplicate',           label: 'duplicate',          neg: true },
+      { id: 'false_positive',      label: 'false positive',     neg: true },
+    ],
+  },
+  {
+    group: 'corrections',
+    labels: [
+      { id: 'wrong_category', label: 'wrong category',  neg: null },
+      { id: 'wrong_severity', label: 'wrong severity',  neg: null },
+      { id: 'missed_context', label: 'missed context',  neg: null },
+    ],
+  },
+  {
+    group: 'positive',
+    labels: [
+      { id: 'useful',      label: 'useful',       neg: false },
+      { id: 'high_signal', label: 'high signal',  neg: false },
+    ],
+  },
 ]
 
+const FEEDBACK_LABELS = FEEDBACK_LABEL_GROUPS.flatMap(g => g.labels)
+
 function labelColor(id, neg) {
-  if (id === 'high_signal') return '#3b82f6'
-  if (id === 'missed_category') return '#a78bfa'
-  if (id === 'useful') return '#4ade80'
-  if (neg) return '#f87171'
+  if (id === 'high_signal')    return '#3b82f6'
+  if (id === 'missed_category' || id === 'wrong_category') return '#a78bfa'
+  if (id === 'missed_context') return '#a78bfa'
+  if (id === 'wrong_severity') return '#f59e0b'
+  if (id === 'useful')         return '#4ade80'
+  if (neg === true)            return '#f87171'
+  if (neg === false)           return '#4ade80'
   return '#64748b'
+}
+
+const LABEL_HINTS = {
+  not_relevant:        'spill will exclude similar posts from future cycles',
+  wrong_geography:     'geography exclusion added; region filtered from future results',
+  unrelated_complaint: 'complaint topic excluded; won\'t surface unless directly about us',
+  too_generic:         'generic pattern excluded; needs brand-specific signal to qualify',
+  duplicate:           'post dismissed as duplicate',
+  false_positive:      'post de-escalated and dismissed; pattern recorded to prevent recurrence',
+  wrong_category:      'category will be corrected immediately on this post',
+  wrong_severity:      'escalation score adjusted; pattern used to calibrate future scoring',
+  missed_context:      'context recorded; similar posts will receive higher priority',
+  useful:              'spill will prioritize similar signals going forward',
+  high_signal:         'high-signal pattern added; similar posts may trigger escalation',
 }
 
 function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFeedbackSubmit }) {
   const [selectedLabel, setSelectedLabel] = useState(null)
   const [selectedCat, setSelectedCat] = useState(post.category_id || '')
+  const [severityDir, setSeverityDir] = useState(null)
   const [explanation, setExplanation] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const [resultAdjustment, setResultAdjustment] = useState('')
   const [history, setHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(true)
 
@@ -191,83 +231,141 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
       .finally(() => setHistoryLoading(false))
   }, [slug, post.id])
 
+  function selectLabel(id) {
+    setSelectedLabel(prev => prev === id ? null : id)
+    setSeverityDir(null)
+    setSubmitError('')
+    setResultAdjustment('')
+  }
+
   async function handleSubmit() {
-    if (!selectedLabel) {
-      setSubmitError('select a label above first')
-      return
-    }
+    if (!selectedLabel) { setSubmitError('select a label first'); return }
+    if (selectedLabel === 'wrong_severity' && !severityDir) { setSubmitError('choose: score too high or too low'); return }
     setSubmitError('')
     setSubmitting(true)
     try {
       const body = { label: selectedLabel, explanation: explanation.trim() || undefined }
+
+      if (selectedLabel === 'wrong_category') {
+        body.field = 'category_id'
+        body.old_value = post.category_id || null
+        body.new_value = selectedCat || null
+      }
       if (selectedLabel === 'missed_category') {
         body.field = 'category_id'
         body.old_value = post.category_id || null
         body.new_value = selectedCat || null
       }
-      await api.submitFeedback(slug, post.id, body)
-      if (selectedLabel === 'missed_category' && selectedCat !== post.category_id) {
+      if (selectedLabel === 'wrong_severity') {
+        body.severity_direction = severityDir
+        body.old_value = String(post.escalation_score || 0)
+      }
+
+      const result = await api.submitFeedback(slug, post.id, body)
+      setResultAdjustment(result.resulting_adjustment || '')
+
+      if ((selectedLabel === 'wrong_category' || selectedLabel === 'missed_category') && selectedCat !== post.category_id) {
         onCategoryChange?.(selectedCat)
       }
-      setHistory(prev => [{ label: selectedLabel, explanation: explanation.trim() || null, created_at: new Date().toISOString() }, ...prev])
+      setHistory(prev => [{
+        label: selectedLabel, explanation: explanation.trim() || null,
+        resulting_adjustment: result.resulting_adjustment || null,
+        severity_direction: severityDir,
+        created_at: new Date().toISOString(),
+      }, ...prev])
       const submittedLabel = selectedLabel
       setSelectedLabel(null)
       setExplanation('')
+      setSeverityDir(null)
       onFeedbackSubmit?.(submittedLabel)
       setSubmitted(true)
-      setTimeout(() => setSubmitted(false), 4000)
+      setTimeout(() => { setSubmitted(false); setResultAdjustment('') }, 5000)
     } catch (err) {
-      setSubmitError(err?.message === 'unauthorized' ? 'session expired — refresh the page' : 'failed to send — try again')
+      setSubmitError(err?.message === 'unauthorized' ? 'session expired — refresh the page' : 'failed — try again')
     } finally { setSubmitting(false) }
   }
 
   return (
     <div style={{ marginTop: 12, padding: '12px 14px', background: '#0b0d16', border: '1px solid #1e2535', borderRadius: 8, animation: 'fadeIn 0.15s ease both' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)' }}>give feedback</span>
+          <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)' }}>feedback</span>
           {submitted && <span style={{ fontSize: 11, color: '#4ade80', animation: 'fadeIn 0.2s ease both' }}>logged — spill is learning ↑</span>}
         </div>
         <button onClick={onClose} style={{ fontSize: 12, color: '#334155', background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1, transition: 'color 0.1s' }} onMouseEnter={e => e.currentTarget.style.color = '#64748b'} onMouseLeave={e => e.currentTarget.style.color = '#334155'}>✕</button>
       </div>
 
-      {/* Label chips */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-        {FEEDBACK_LABELS.map(lbl => {
-          const c = labelColor(lbl.id, lbl.neg)
-          const isActive = selectedLabel === lbl.id
-          return (
-            <button
-              key={lbl.id}
-              onClick={() => { setSelectedLabel(isActive ? null : lbl.id); setSubmitError('') }}
-              style={{
-                fontSize: 11, padding: '3px 10px', borderRadius: 99,
-                border: `1px solid ${isActive ? c : '#1e2535'}`,
-                background: isActive ? `${c}18` : 'transparent',
-                color: isActive ? c : '#475569',
-                cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.12s',
-              }}
-              onMouseEnter={e => { if (!isActive) { e.currentTarget.style.borderColor = c; e.currentTarget.style.color = c } }}
-              onMouseLeave={e => { if (!isActive) { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#475569' } }}
-            >
-              {lbl.label}
-            </button>
-          )
-        })}
-      </div>
+      {/* Labels grouped */}
+      {FEEDBACK_LABEL_GROUPS.map(group => (
+        <div key={group.group} style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 5, fontFamily: 'var(--font-mono)' }}>{group.group}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            {group.labels.map(lbl => {
+              const c = labelColor(lbl.id, lbl.neg)
+              const isActive = selectedLabel === lbl.id
+              return (
+                <button
+                  key={lbl.id}
+                  onClick={() => selectLabel(lbl.id)}
+                  style={{
+                    fontSize: 11, padding: '2px 9px', borderRadius: 99,
+                    border: `1px solid ${isActive ? c : '#1e2535'}`,
+                    background: isActive ? `${c}18` : 'transparent',
+                    color: isActive ? c : '#475569',
+                    cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.12s',
+                  }}
+                  onMouseEnter={e => { if (!isActive) { e.currentTarget.style.borderColor = c; e.currentTarget.style.color = c } }}
+                  onMouseLeave={e => { if (!isActive) { e.currentTarget.style.borderColor = '#1e2535'; e.currentTarget.style.color = '#475569' } }}
+                >
+                  {lbl.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ))}
 
-      {/* Category dropdown — only for missed_category */}
-      {selectedLabel === 'missed_category' && (
-        <div style={{ marginBottom: 10 }}>
+      {/* Category picker — wrong_category or missed_category */}
+      {(selectedLabel === 'wrong_category' || selectedLabel === 'missed_category') && (
+        <div style={{ marginBottom: 10, marginTop: 4 }}>
           <div style={{ fontSize: 10, color: '#475569', marginBottom: 5, fontFamily: 'var(--font-mono)' }}>correct category</div>
           <select
             value={selectedCat}
             onChange={e => setSelectedCat(e.target.value)}
             style={{ fontSize: 12, padding: '4px 8px', background: '#191d2b', border: '1px solid #243047', borderRadius: 6, color: '#e2e8f0', fontFamily: 'inherit', width: '100%' }}
           >
-            <option value="">unclassified / irrelevant</option>
+            <option value="">unclassified / none</option>
             {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
           </select>
+        </div>
+      )}
+
+      {/* Severity direction picker */}
+      {selectedLabel === 'wrong_severity' && (
+        <div style={{ marginBottom: 10, marginTop: 4 }}>
+          <div style={{ fontSize: 10, color: '#475569', marginBottom: 6, fontFamily: 'var(--font-mono)' }}>
+            current score: <span style={{ color: '#f59e0b' }}>{post.escalation_score || 0}</span> — was it...
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[
+              { dir: 'lower', label: 'too high — shouldn\'t have escalated' },
+              { dir: 'higher', label: 'too low — should have escalated' },
+            ].map(opt => (
+              <button
+                key={opt.dir}
+                onClick={() => setSeverityDir(prev => prev === opt.dir ? null : opt.dir)}
+                style={{
+                  fontSize: 11, padding: '3px 10px', borderRadius: 6, flex: 1,
+                  border: `1px solid ${severityDir === opt.dir ? '#f59e0b' : '#1e2535'}`,
+                  background: severityDir === opt.dir ? 'rgba(245,158,11,0.1)' : 'transparent',
+                  color: severityDir === opt.dir ? '#f59e0b' : '#475569',
+                  cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.12s',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -275,16 +373,14 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
       <textarea
         value={explanation}
         onChange={e => setExplanation(e.target.value)}
-        placeholder={selectedLabel
-          ? `explain why (helps spill learn faster)... e.g. "aviation academy complaints are not relevant because we only train commercial pilots"`
-          : 'select a label above, then explain why...'}
+        placeholder={selectedLabel ? `why? (helps spill learn faster)` : 'select a label above...'}
         rows={2}
-        style={{ width: '100%', fontSize: 12, background: '#191d2b', border: '1px solid #243047', borderRadius: 6, color: '#94a3b8', padding: '6px 8px', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, boxSizing: 'border-box', transition: 'border-color 0.12s' }}
+        style={{ width: '100%', fontSize: 12, background: '#191d2b', border: '1px solid #243047', borderRadius: 6, color: '#94a3b8', padding: '6px 8px', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5, boxSizing: 'border-box', transition: 'border-color 0.12s', marginBottom: 8 }}
         onFocus={e => e.currentTarget.style.borderColor = '#334155'}
         onBlur={e => e.currentTarget.style.borderColor = '#243047'}
       />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <button
           onClick={handleSubmit}
           disabled={submitting}
@@ -297,38 +393,36 @@ function FeedbackPanel({ post, slug, categories, onClose, onCategoryChange, onFe
             fontFamily: 'inherit', transition: 'all 0.15s',
           }}
         >
-          {submitting ? '…' : 'send feedback'}
+          {submitting ? '…' : 'send'}
         </button>
-        {submitError && (
-          <span style={{ fontSize: 11, color: '#f87171' }}>{submitError}</span>
+        {submitError && <span style={{ fontSize: 11, color: '#f87171' }}>{submitError}</span>}
+        {!submitError && resultAdjustment && (
+          <span style={{ fontSize: 11, color: '#4ade80', fontStyle: 'italic' }}>{resultAdjustment}</span>
         )}
-        {!submitError && selectedLabel && (
-          <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>
-            {['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate'].includes(selectedLabel)
-              ? 'spill will exclude similar posts from future cycles'
-              : selectedLabel === 'high_signal' || selectedLabel === 'useful'
-              ? 'spill will prioritize similar signals going forward'
-              : selectedLabel === 'missed_category'
-              ? 'classification will be corrected on this post'
-              : 'feedback helps tune classification'}
-          </span>
+        {!submitError && !resultAdjustment && selectedLabel && (
+          <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>{LABEL_HINTS[selectedLabel] || 'feedback recorded'}</span>
         )}
       </div>
 
-      {/* Feedback history */}
+      {/* History */}
       {!historyLoading && history.length > 0 && (
         <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #1e2535' }}>
           <div style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8, fontFamily: 'var(--font-mono)' }}>
-            {history.length} signal{history.length > 1 ? 's' : ''} logged — influencing retrieval
+            {history.length} signal{history.length > 1 ? 's' : ''} logged
           </div>
           {history.slice(0, 5).map((h, i) => {
             const c = labelColor(h.label, FEEDBACK_LABELS.find(l => l.id === h.label)?.neg)
             return (
-              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 5 }}>
-                <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 99, background: `${c}18`, border: `1px solid ${c}44`, color: c, whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
-                  {h.label?.replace(/_/g, ' ')}
-                </span>
-                {h.explanation && <span style={{ fontSize: 11, color: '#334155', lineHeight: 1.4 }}>{h.explanation}</span>}
+              <div key={i} style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 99, background: `${c}18`, border: `1px solid ${c}44`, color: c, whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                    {h.label?.replace(/_/g, ' ')}{h.severity_direction ? ` (${h.severity_direction})` : ''}
+                  </span>
+                  {h.explanation && <span style={{ fontSize: 11, color: '#334155', lineHeight: 1.4 }}>{h.explanation}</span>}
+                </div>
+                {h.resulting_adjustment && (
+                  <div style={{ fontSize: 10, color: '#3b82f6', marginTop: 2, paddingLeft: 2, fontStyle: 'italic' }}>→ {h.resulting_adjustment}</div>
+                )}
               </div>
             )
           })}

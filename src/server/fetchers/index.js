@@ -5,6 +5,7 @@ import { fetchPlaystore } from './playstore.js';
 import { fetchTwitter } from './twitter.js';
 import { fetchAppstore } from './appstore.js';
 import { fetchLinkedIn } from './linkedin.js';
+import { fetchInstagram } from './instagram.js';
 
 export async function fetchAll(orgConfig) {
   const tasks = [];
@@ -17,6 +18,7 @@ export async function fetchAll(orgConfig) {
   if (sources.twitter?.enabled) tasks.push(fetchTwitter(sources.twitter));
   if (sources.appstore?.enabled) tasks.push(fetchAppstore(sources.appstore));
   if (sources.linkedin?.enabled) tasks.push(fetchLinkedIn(sources.linkedin));
+  if (sources.instagram?.enabled) tasks.push(fetchInstagram(sources.instagram));
 
   const results = await Promise.allSettled(tasks);
 

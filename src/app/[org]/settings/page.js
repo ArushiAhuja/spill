@@ -12,6 +12,7 @@ const SOURCE_COLORS = {
   playstore: '#9b8ff7',
   appstore: '#34d399',
   linkedin: '#0a84ff',
+  instagram: '#e1306c',
   youtube: '#f87171',
 }
 
@@ -23,6 +24,7 @@ const ALL_SOURCES = [
   { id: 'playstore', label: 'Play Store', desc: 'app store reviews' },
   { id: 'appstore', label: 'App Store', desc: 'iOS app store reviews' },
   { id: 'linkedin', label: 'LinkedIn', desc: 'posts, company pages & professional mentions' },
+  { id: 'instagram', label: 'Instagram', desc: 'public profiles, posts & brand mentions' },
   { id: 'youtube', label: 'YouTube', desc: 'comments', disabled: true },
 ]
 
@@ -417,6 +419,45 @@ function SourceCard({ slug, sourceInfo, sourceData, onUpdate }) {
                 <div style={{ fontSize: 11, color: '#334155', marginTop: 4 }}>
                   slug from linkedin.com/company/<b>slug</b> — used with li_at for company page post scraping.
                 </div>
+              </div>
+            </>
+          )}
+          {sourceInfo.id === 'instagram' && (
+            <>
+              <div style={{
+                fontSize: 11,
+                color: '#94a3b8',
+                background: 'rgba(225,48,108,0.07)',
+                border: '1px solid rgba(225,48,108,0.2)',
+                borderRadius: 8,
+                padding: '8px 12px',
+                lineHeight: 1.6,
+              }}>
+                works out of the box — fetches brand mentions via Google News. add public profile usernames or hashtags to also scrape posts directly via Firecrawl.
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
+                  public profiles <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155', fontStyle: 'italic' }}>(one username per line, no @)</span>
+                </div>
+                <textarea
+                  rows={3}
+                  value={(Array.isArray(localData.config?.profiles) ? localData.config.profiles : []).join('\n')}
+                  onChange={(e) => setConfigField('profiles', e.target.value.split('\n').map(s => s.replace(/^@/, '').trim()).filter(Boolean))}
+                  placeholder={'nasa\nnatgeo'}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>
+                  hashtags <span style={{ textTransform: 'none', letterSpacing: 0, color: '#334155', fontStyle: 'italic' }}>(one per line, no #)</span>
+                </div>
+                <textarea
+                  rows={2}
+                  value={(Array.isArray(localData.config?.hashtags) ? localData.config.hashtags : []).join('\n')}
+                  onChange={(e) => setConfigField('hashtags', e.target.value.split('\n').map(s => s.replace(/^#/, '').trim()).filter(Boolean))}
+                  placeholder={'travel\nfood'}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
               </div>
             </>
           )}

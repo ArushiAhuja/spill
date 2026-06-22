@@ -1,7 +1,95 @@
 import { Buffer } from 'buffer';
+import { createHash } from 'crypto';
+import { firecrawlScrape, getFirecrawlKey } from './firecrawl.js';
 
 const TIMEOUT_MS = 10_000;
 const MAX_RESULTS = '10'; // free tier safe; bump to 100 on Basic tier
+
+// Nitter instances (Twitter public mirrors — no auth required)
+const NITTER_INSTANCES = [
+  'https://nitter.poast.org',
+  'https://nitter.privacydev.net',
+  'https://nitter.catsarch.com',
+];
+
+function makeFirecrawlId(raw) {
+  return `twitter_fc_${createHash('md5').update(String(raw)).digest('hex')}`;
+}
+
+function parseNitterMarkdown(markdown, query) {
+  if (!markdown || markdown.length < 100) return [];
+  const posts = [];
+  // Nitter separates tweets with horizontal rules or double newlines between post blocks
+  const blocks = markdown.split(/\n---+\n|\n\*\*\*+\n/);
+
+  for (const block of blocks.slice(0, 15)) {
+    // Extract @username
+    const authorMatch = block.match(/@([A-Za-z0-9_]+)/);
+    if (!authorMatch) continue;
+
+    // Strip markdown formatting and image refs to get tweet text
+    const text = block
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/^#+\s*/gm, '')
+      .replace(/[*_`]/g, '')
+      .replace(/@[A-Za-z0-9_]+/g, '')    // remove @mentions noise
+      .replace(/\d+\s*(likes?|retweets?|replies?|reposts?)/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (text.length < 20) continue;
+
+    // Prefer individual tweet URLs (/status/ID) — never fall back to search pages
+    const statusMatch = block.match(/https?:\/\/[^\s)]+\/status\/(\d+)/i);
+    const url = statusMatch
+      ? statusMatch[0].replace(/nitter\.[^/]+/, 'twitter.com').replace(/x\.com/, 'twitter.com')
+      : `https://twitter.com/${authorMatch[1]}`;
+
+    posts.push({
+      id: makeFirecrawlId(block.slice(0, 120)),
+      source: 'twitter',
+      author: `@${authorMatch[1]}`,
+      title: text.length > 120 ? text.slice(0, 120) + '…' : text,
+      body: text,
+      url,
+      score: 0,
+      follower_count: 0,
+      created_at: new Date(),
+    });
+  }
+  return posts;
+}
+
+async function fetchViaFirecrawl(queries, apiKey) {
+  const allPosts = [];
+  const seen = new Set();
+
+  for (const query of queries.slice(0, 3)) {
+    let gotResults = false;
+    for (const instance of NITTER_INSTANCES) {
+      try {
+        const url = `${instance}/search?q=${encodeURIComponent(query)}&f=tweets`;
+        const markdown = await firecrawlScrape(url, apiKey, { waitFor: 2000 });
+        const posts = parseNitterMarkdown(markdown, query);
+        for (const p of posts) {
+          if (!seen.has(p.id)) { seen.add(p.id); allPosts.push(p); }
+        }
+        if (posts.length) {
+          console.log(`[twitter] firecrawl nitter (${instance}): ${posts.length} tweets for "${query}"`);
+          gotResults = true;
+          break;
+        }
+      } catch (err) {
+        console.warn(`[twitter] firecrawl nitter ${instance} failed for "${query}":`, err.message);
+      }
+    }
+    if (!gotResults) {
+      console.warn(`[twitter] firecrawl: all nitter instances failed for "${query}"`);
+    }
+  }
+  return allPosts;
+}
 
 function timedFetch(url, options = {}) {
   const controller = new AbortController();
@@ -67,22 +155,29 @@ function normalize(tweet, usersById) {
 // config.queries: array of search queries
 // credentials.bearer_token or credentials.api_key + credentials.api_secret
 export async function fetchTwitter({ config = {}, credentials = {} } = {}) {
+  const queries = Array.isArray(config.queries) && config.queries.length
+    ? config.queries
+    : [];
+
   let token;
   try {
     token = await getBearerToken(credentials);
   } catch (err) {
     console.error(`[twitter] Auth failed: ${err.message}`);
-    return [];
   }
 
   if (!token) {
-    console.warn('[twitter] Skipped — set bearer_token or api_key + api_secret in credentials');
+    // No API token — try Firecrawl/nitter directly
+    const fcKey = getFirecrawlKey(credentials);
+    if (fcKey && queries.length) {
+      console.log('[twitter] No API token — using Firecrawl/nitter');
+      const posts = await fetchViaFirecrawl(queries, fcKey);
+      console.log(`[twitter] firecrawl OK — ${posts.length} tweets`);
+      return posts;
+    }
+    console.warn('[twitter] Skipped — set bearer_token or api_key + api_secret in credentials (or FIRECRAWL_API_KEY for nitter fallback)');
     return [];
   }
-
-  const queries = Array.isArray(config.queries) && config.queries.length
-    ? config.queries
-    : [];
 
   if (!queries.length) {
     console.warn('[twitter] No queries configured, skipping');
@@ -151,6 +246,20 @@ export async function fetchTwitter({ config = {}, credentials = {} } = {}) {
     } catch (err) {
       console.warn(`[twitter] query "${searchQuery}" failed: ${err.message}`);
     }
+  }
+
+  if (allPosts.length) {
+    console.log(`[twitter] API OK — ${allPosts.length} tweets`);
+    return allPosts;
+  }
+
+  // Fallback: Firecrawl + nitter when API returns nothing or no token configured
+  const fcKey = getFirecrawlKey(credentials);
+  if (fcKey) {
+    console.log('[twitter] API returned 0 results — trying Firecrawl/nitter');
+    const fcPosts = await fetchViaFirecrawl(queries, fcKey);
+    console.log(`[twitter] firecrawl OK — ${fcPosts.length} tweets`);
+    return fcPosts;
   }
 
   console.log(`[twitter] OK — ${allPosts.length} tweets`);
