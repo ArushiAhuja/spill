@@ -165,4 +165,6 @@ export const api = {
     const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))).toString()
     return request('GET', `/internal/observability/traces${qs ? `?${qs}` : ''}`)
   },
+  getObservabilityOperators: () => request('GET', '/internal/observability/operators'),
+  setObservabilityOperator: (email, granted) => request('POST', '/internal/observability/operators', { email, granted }),
 }
