@@ -49,6 +49,14 @@ function metricsFor(results) {
   };
 }
 
+function metricDeltas(current = {}, baseline = {}) {
+  const keys = ['relevance_accuracy', 'classification_accuracy', 'confidence_calibration_error', 'hallucination_rate', 'false_positive_rate'];
+  return Object.fromEntries(keys.map(key => {
+    const now = current[key]; const before = baseline[key];
+    return [key, typeof now === 'number' && typeof before === 'number' ? Math.round((now - before) * 1000) / 1000 : null];
+  }));
+}
+
 export async function POST(request) {
   try {
     const body = await request.json(); const orgId = body.org_id;
@@ -110,6 +118,13 @@ export async function POST(request) {
       `INSERT INTO agent_evaluation_runs (org_id,agent_name,prompt_key,prompt_version,config_version,model,case_count,metrics,results,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [orgId, agentName, promptKey, resolvedPrompt?.version || 0, config?.version || 0, model, cases.length, JSON.stringify(metrics), JSON.stringify(results), auth.user.email || null]
     );
-    return NextResponse.json({ run });
+    const { rows: previousRuns } = await query(
+      `SELECT id,prompt_version,model,metrics,created_at FROM agent_evaluation_runs
+       WHERE org_id=$1 AND agent_name=$2 AND prompt_key=$3 AND id<>$4
+       ORDER BY created_at DESC LIMIT 1`,
+      [orgId, agentName, promptKey, run.id]
+    );
+    const baseline = previousRuns[0] || null;
+    return NextResponse.json({ run, comparison: baseline ? { baseline, deltas: metricDeltas(run.metrics, baseline.metrics) } : null });
   } catch (err) { return NextResponse.json({ error: err.message }, { status: 500 }); }
 }
