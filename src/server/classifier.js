@@ -112,7 +112,8 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
     runtimeContext: {
       categories: categories.map(({ id, name, description, severity }) => ({ id, name, description, severity })),
       posts: posts.map((post, index) => ({ post_index: index + 1, title: post.title || null, body: (post.body || '').slice(0, 500), source: post.source, engagement: post.score || 0 })),
-      severity_prompt_id: severityComposition.prompt.id,
+      severity_policy: { prompt_id: severityComposition.prompt.id, version: severityComposition.prompt.version, instructions: severityComposition.systemPrompt },
+      required_output: [{ post_index: 1, category_id: 'uuid or null', customer_impact: '0-10', operational_urgency: '0-10', trust_risk: '0-10', virality_potential: '0-10', reasoning: 'one sentence', response_template: 'string or null', location_tag: 'city name or null', confidence: '0-100', is_relevant: true }],
       output_rules: `Return only a JSON array with exactly ${posts.length} objects, using post_index (1-based). When relevance is unclear, set is_relevant false.`,
     },
   });
@@ -143,25 +144,7 @@ Rules:
       },
       {
         role: 'user',
-        content: `${categoryComposition.userPrompt}\n\nSEVERITY POLICY\n${severityComposition.systemPrompt}\n\nCategories available:\n${categoryList}\n${feedbackSection}
-Posts to classify:\n${postsText}
-
-Return a JSON array with EXACTLY ${posts.length} objects. Include a "post_index" field (1-based) so results can be matched back to posts even if order shifts:
-[{
-  "post_index": 1,
-  "category_id": "uuid or null",
-  "customer_impact": 0-10,
-  "operational_urgency": 0-10,
-  "trust_risk": 0-10,
-  "virality_potential": 0-10,
-  "reasoning": "one sentence",
-  "response_template": "string or null",
-  "location_tag": "city name or null",
-  "confidence": 0-100,
-  "is_relevant": true_or_false
-}]
-
-${scoringContent}`,
+        content: categoryComposition.userPrompt,
       },
     ],
   });
@@ -234,7 +217,7 @@ ${scoringContent}`,
       cls.location_tag || null,
       cls.is_relevant !== false,
       clamp((cls.confidence ?? 65) / 100, 0, 1),
-      { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw, prompt: categoryComposition.prompt, promptHash: categoryComposition.promptHash, promptSnapshot: categoryComposition.systemPrompt, severityPrompt: severityComposition.prompt }, severityConfig,
+      { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw, prompt: categoryComposition.prompt, promptHash: categoryComposition.promptHash, promptSnapshot: categoryComposition.finalPrompt, severityPrompt: severityComposition.prompt, severityPromptHash: severityComposition.promptHash }, severityConfig,
     );
   });
 }

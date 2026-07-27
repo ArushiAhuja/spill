@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 24;
+const MIGRATION_VERSION = 25;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -593,6 +593,12 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_prompt_execution_debug_org_time ON prompt_execution_debug(org_id, executed_at DESC)`);
+
+  // A version is only auditable when its purpose is retained with the version.
+  // Earlier registry rows predate this field, so label their provenance instead
+  // of inventing a business rationale that was never captured.
+  await query(`ALTER TABLE prompt_registry ADD COLUMN IF NOT EXISTS change_summary TEXT`);
+  await query(`UPDATE prompt_registry SET change_summary = CASE WHEN prompt_id LIKE 'legacy_%' THEN 'Migrated from legacy organisation prompt; original change rationale was not recorded' WHEN scope='global' THEN 'Initial Spill-managed global prompt' ELSE 'Prompt version created' END WHERE change_summary IS NULL OR btrim(change_summary) = ''`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

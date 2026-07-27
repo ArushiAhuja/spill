@@ -32,8 +32,8 @@ export async function ensurePromptRegistrySeeded() {
   if (seeded) return;
   for (const agentName of AGENT_NAMES) {
     await query(
-      `INSERT INTO prompt_registry (prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by)
-       VALUES ($1,$2,'global',NULL,1,'active',$3,'Spill system')
+      `INSERT INTO prompt_registry (prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by,change_summary)
+       VALUES ($1,$2,'global',NULL,1,'active',$3,'Spill system','Initial Spill-managed global prompt')
        ON CONFLICT (prompt_id) DO NOTHING`,
       [`global_${agentName}_v1`, agentName, AGENT_PROMPT_DEFAULTS[agentName]]
     );
@@ -45,18 +45,27 @@ export async function getActivePrompt({ orgId, agentName }) {
   validateAgent(agentName);
   await ensurePromptRegistrySeeded();
   const { rows } = await query(
-    `SELECT id,prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by,created_at
+    `SELECT id,prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by,change_summary,created_at
      FROM prompt_registry
      WHERE agent_name=$1 AND status='active' AND (scope='global' OR (scope='organization' AND organization_id=$2))
-     ORDER BY CASE WHEN scope='organization' THEN 0 ELSE 1 END, version DESC
-     LIMIT 1`,
+     ORDER BY CASE WHEN scope='organization' THEN 0 ELSE 1 END, version DESC`,
     [agentName, orgId]
   );
-  if (!rows[0]) throw new Error(`no active prompt for ${agentName}`);
-  return rows[0];
+  return selectActivePrompt(rows, agentName);
 }
 
-export async function createPromptVersion({ agentName, scope = 'organization', organizationId = null, promptTemplate, createdBy = null, status = 'draft' }) {
+export function selectActivePrompt(rows, agentName) {
+  const organizationRows = rows.filter(row => row.scope === 'organization');
+  const globalRows = rows.filter(row => row.scope === 'global');
+  if (organizationRows.length > 1 || globalRows.length > 1) {
+    throw new Error(`prompt registry conflict for ${agentName}: expected one active prompt per scope, found organization=${organizationRows.length}, global=${globalRows.length}`);
+  }
+  if (organizationRows[0]) return organizationRows[0];
+  if (globalRows[0]) return globalRows[0];
+  throw new Error(`no active prompt for ${agentName}`);
+}
+
+export async function createPromptVersion({ agentName, scope = 'organization', organizationId = null, promptTemplate, createdBy = null, changeSummary = 'Prompt version created', status = 'draft' }) {
   validateAgent(agentName);
   if (!['global', 'organization'].includes(scope)) throw new Error('invalid prompt scope');
   if (scope === 'organization' && !organizationId) throw new Error('organizationId required for organization prompt');
@@ -72,9 +81,9 @@ export async function createPromptVersion({ agentName, scope = 'organization', o
     await query(`UPDATE prompt_registry SET status='deprecated',updated_at=NOW() WHERE agent_name=$1 AND scope=$2 AND organization_id IS NOT DISTINCT FROM $3 AND status='active'`, [agentName, scope, scope === 'organization' ? organizationId : null]);
   }
   const { rows } = await query(
-    `INSERT INTO prompt_registry (prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [promptId, agentName, scope, scope === 'organization' ? organizationId : null, version, status, String(promptTemplate || '').trim(), createdBy]
+    `INSERT INTO prompt_registry (prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by,change_summary)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [promptId, agentName, scope, scope === 'organization' ? organizationId : null, version, status, String(promptTemplate || '').trim(), createdBy, String(changeSummary || 'Prompt version created').trim()]
   );
   return rows[0];
 }
@@ -92,7 +101,7 @@ export async function listPromptVersions({ orgId, agentName }) {
   validateAgent(agentName);
   await ensurePromptRegistrySeeded();
   const { rows } = await query(
-    `SELECT id,prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by,created_at,updated_at
+    `SELECT id,prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by,change_summary,created_at,updated_at
      FROM prompt_registry WHERE agent_name=$1 AND (scope='global' OR organization_id=$2)
      ORDER BY scope DESC, version DESC`, [agentName, orgId]
   );

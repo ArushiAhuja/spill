@@ -159,10 +159,6 @@ export async function POST(request, { params }) {
     }
 
     const intelligenceAgentConfig = await getOrganizationAgentConfig(access.orgId, 'intelligence_extraction');
-    const composition = await composePrompt({
-      agentName: 'intelligence_extraction', orgId: access.orgId, organization: org, agentConfig: intelligenceAgentConfig, model: 'gpt-4o-mini',
-      runtimeContext: { operation: 'Generate initial monitoring categories, source queries, and structured organisation intelligence from supplied onboarding evidence.' },
-    });
 
     // Try AI generation
     if (process.env.OPENAI_API_KEY && (org.description || websiteText)) {
@@ -229,6 +225,10 @@ Rules for sources.linkedin:
 - company_handles: 1-2 LinkedIn company page slugs (the part after linkedin.com/company/) — use the actual slug from the company's LinkedIn URL
 
 Be specific to this company's actual industry. Think like an ops lead at this company — what internet conversations would they want to know about?`;
+      const composition = await composePrompt({
+        agentName: 'intelligence_extraction', orgId: access.orgId, organization: org, agentConfig: intelligenceAgentConfig, model: 'gpt-4o-mini',
+        runtimeContext: { onboarding_instruction: userMessage },
+      });
 
       try {
         const response = await getOpenAI().chat.completions.create({
@@ -236,8 +236,8 @@ Be specific to this company's actual industry. Think like an ops lead at this co
           max_tokens: 3000,
           temperature: 0.3,
           messages: [
-            { role: 'system', content: `${composition.systemPrompt}\n\nReturn ONLY valid JSON with no markdown or explanation.` },
-            { role: 'user', content: userMessage },
+            { role: 'system', content: composition.systemPrompt },
+            { role: 'user', content: composition.userPrompt },
           ],
         });
 

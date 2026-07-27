@@ -95,21 +95,7 @@ EXCLUDE only if one of these applies with high confidence:
           },
           {
             role: 'user',
-            content: `${composition.userPrompt}
-
-Company: ${orgName}
-Description: ${orgDescription || orgName}
-${operationalContext}
-${agentPolicy ? `\n${agentPolicy}\n` : ''}
-${feedbackContext ? `\nLearned exclusions from past feedback:\n${feedbackContext}\n` : ''}
-Posts come from Reddit, Hacker News, Google News, Twitter, and app store reviews. Some matched keyword filters but may not be genuinely about this company. Verify each one actually matters to this company's operations or reputation.
-
-${criteriaBlock}
-
-Posts:
-${postList}
-
-Return JSON array of relevant indexes (e.g. [0,2,5]) or [] if none:`,
+            content: composition.userPrompt,
           },
         ],
       });
@@ -121,7 +107,15 @@ Return JSON array of relevant indexes (e.g. [0,2,5]) or [] if none:`,
         if (Array.isArray(idxs)) {
           for (const idx of idxs) {
             if (Number.isInteger(idx) && idx >= 0 && idx < batch.length) {
-              kept.push(batch[idx]);
+              kept.push({
+                ...batch[idx],
+                _relevance_trace: {
+                  prompt: composition.prompt,
+                  promptHash: composition.promptHash,
+                  promptSnapshot: composition.finalPrompt,
+                  model,
+                },
+              });
             }
           }
         }
@@ -271,7 +265,7 @@ export async function runOrgCycle(orgId) {
 
     // Deterministic agents still resolve a versioned policy and emit a debug
     // record, so the complete pipeline can be reproduced from one contract.
-    await composePrompt({
+    const sourceComposition = await composePrompt({
       agentName: 'source_understanding', orgId, organization: org, categories, sourceConfigs, agentConfig: sourceAgentConfig,
       runtimeContext: { operation: 'normalise source candidates and apply deterministic brand, exclusion, source and geography checks' },
       model: sourceAgentConfig.model,
@@ -471,6 +465,10 @@ export async function runOrgCycle(orgId) {
       ]);
       post.ai_trace_id = await createEventTrace({
         orgId, post, quality, decision,
+        sourceObservation: {
+          promptKey: 'source_understanding', promptVersion: sourceComposition.prompt.version, model: sourceComposition.model,
+          promptSnapshot: { id: sourceComposition.prompt.id, hash: sourceComposition.promptHash, content: sourceComposition.finalPrompt },
+        },
         promptVersions: {
           classifier_system: classifierSystem.version,
           classifier_scoring: classifierScoring.version,
@@ -480,9 +478,10 @@ export async function runOrgCycle(orgId) {
           name: 'Relevance Agent', kind: 'agent',
           model: post.relevance_tier === 'tier_3_ai_verified' ? relevanceAgentConfig.model : 'deterministic-policy',
           promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance_filter' : null,
-          promptVersion: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null,
-        input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', source_agent_config_version: sourceAgentConfig.version, source_agent_policy: buildAgentPolicyContext(sourceAgentConfig), agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
+          promptVersion: post._relevance_trace?.prompt?.version ?? (post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null),
+        input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', prompt_id: post._relevance_trace?.prompt?.id || null, prompt_hash: post._relevance_trace?.promptHash || null, source_agent_config_version: sourceAgentConfig.version, source_agent_policy: buildAgentPolicyContext(sourceAgentConfig), agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
           output: { is_relevant: post.is_relevant !== false }, latencyMs: 0,
+          promptSnapshot: post._relevance_trace ? { id: post._relevance_trace.prompt.id, hash: post._relevance_trace.promptHash, content: post._relevance_trace.promptSnapshot } : null,
         }, {
           name: 'Category Detection Agent', kind: 'agent',
           model: post._classification_trace?.model || 'deterministic-keyword-fallback',
@@ -503,7 +502,7 @@ export async function runOrgCycle(orgId) {
         }, {
           name: 'Severity Agent', kind: 'evaluator',
           promptKey: 'classifier_scoring', promptVersion: post._classification_trace?.severityPrompt?.version ?? classifierScoring.version,
-          input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0, agent_config_version: severityAgentConfig.version, agent_policy: buildAgentPolicyContext(severityAgentConfig), prompt_id: post._classification_trace?.severityPrompt?.id || null },
+          input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0, agent_config_version: severityAgentConfig.version, agent_policy: buildAgentPolicyContext(severityAgentConfig), prompt_id: post._classification_trace?.severityPrompt?.id || null, prompt_hash: post._classification_trace?.severityPromptHash || null },
           output: { escalation_score: post.escalation_score, escalation_dimensions: post.escalation_dimensions, reason: post.reasoning, escalated: post.escalated }, latencyMs: 0,
         }, {
           name: 'Executive Summary Agent', kind: 'agent', model: 'deterministic-summary-v1',
