@@ -9,6 +9,7 @@ import { detectIncidents } from './detectors/incidents.js';
 import { ensureMigrations } from './migrate.js';
 import { getOrgFeedbackContext, updateOrgIntelligence } from './feedback.js';
 import { getPrompt, getPromptMetadata } from './prompts.js';
+import { getOrganizationAgentConfig, buildAgentPolicyContext } from './organization-agent-config.js';
 import { assignCluster, createEventTrace, executiveSummary, linkTraceToPost, recordTraceObservation, signalQuality } from './observability.js';
 
 let _openai = null;
@@ -21,7 +22,7 @@ function getOpenAI() {
 // didn't match the brand keyword. GPT decides if the post is genuinely about
 // this company's industry/niche, using description + context_queries as context.
 // Uses strict criteria: when in doubt, exclude.
-async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries = [], intel = {}, feedbackContext = null, orgId = null) {
+async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries = [], intel = {}, feedbackContext = null, orgId = null, agentConfig = null) {
   if (!posts.length || !process.env.OPENAI_API_KEY) return [];
 
   const operationalContext = [
@@ -36,6 +37,8 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
 
   const BATCH = 20;
   const kept = [];
+  const agentPolicy = buildAgentPolicyContext(agentConfig);
+  const model = ['gpt-4o-mini', 'gpt-4o'].includes(agentConfig?.model) ? agentConfig.model : 'gpt-4o-mini';
 
   for (let i = 0; i < posts.length; i += BATCH) {
     const batch = posts.slice(i, i + BATCH);
@@ -72,7 +75,7 @@ EXCLUDE only if one of these applies with high confidence:
 - It is entirely generic how-to or educational content with zero company-specific signal`;
 
       const res = await getOpenAI().chat.completions.create({
-        model: 'gpt-4o-mini',
+        model,
         max_tokens: 80,
         temperature: 0,
         messages: [
@@ -85,6 +88,7 @@ EXCLUDE only if one of these applies with high confidence:
             content: `Company: ${orgName}
 Description: ${orgDescription || orgName}
 ${operationalContext}
+${agentPolicy ? `\n${agentPolicy}\n` : ''}
 ${feedbackContext ? `\nLearned exclusions from past feedback:\n${feedbackContext}\n` : ''}
 Posts come from Reddit, Hacker News, Google News, Twitter, and app store reviews. Some matched keyword filters but may not be genuinely about this company. Verify each one actually matters to this company's operations or reputation.
 
@@ -224,6 +228,10 @@ export async function runOrgCycle(orgId) {
 
     const intel = org?.intel_profile || {};
     const feedbackContext = await getOrgFeedbackContext(orgId).catch(() => null);
+    const [relevanceAgentConfig, categoryAgentConfig] = await Promise.all([
+      getOrganizationAgentConfig(orgId, 'relevance'),
+      getOrganizationAgentConfig(orgId, 'category'),
+    ]);
     const intelBrandKws = (intel.brandKeywords || []).map(k => k.toLowerCase());
     const intelProductKws = (intel.productKeywords || []).map(k => k.toLowerCase());
     const intelPainKws = (intel.customerPainPoints || []).map(k => k.toLowerCase());
@@ -349,7 +357,7 @@ export async function runOrgCycle(orgId) {
     // Tier 3 (subreddit-only posts with no keyword match) still go through the AI relevance gate.
     const directPosts = [...tier1, ...tier2];
     const tier3Filtered = tier3Candidates.length > 0
-      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext, orgId)
+      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext, orgId, relevanceAgentConfig)
       : [];
 
     console.log(`[org ${orgId}] relevance: direct=${directPosts.length} (t1=${tier1.length} t2=${tier2.length}) tier3_candidates=${tier3Candidates.length} tier3_passed=${tier3Filtered.length}`);
@@ -402,7 +410,7 @@ export async function runOrgCycle(orgId) {
     let classifiedDirect;
     try {
       classifiedDirect = categories.length > 0 && newDirect.length > 0
-        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel, orgId)
+        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig)
         : newDirect.map(noCategories);
     } catch (err) {
       console.warn('[scheduler] classifyPosts failed for tier1+tier2, storing keyword-matched posts with score 0:', err.message);
@@ -410,7 +418,7 @@ export async function runOrgCycle(orgId) {
     }
 
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
-      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel, orgId)
+      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig)
       : newTier3.map(noCategories);
 
     // Drop posts the classifier flagged as not genuinely about this company.
@@ -443,10 +451,10 @@ export async function runOrgCycle(orgId) {
         },
         observations: [{
           name: 'Relevance Agent', kind: 'agent',
-          model: post.relevance_tier === 'tier_3_ai_verified' ? 'gpt-4o-mini' : 'deterministic-policy',
+          model: post.relevance_tier === 'tier_3_ai_verified' ? relevanceAgentConfig.model : 'deterministic-policy',
           promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance_filter' : null,
           promptVersion: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null,
-          input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks' },
+          input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
           output: { is_relevant: post.is_relevant !== false }, latencyMs: 0,
         }, {
           name: 'Category Detection Agent', kind: 'agent',
@@ -456,6 +464,8 @@ export async function runOrgCycle(orgId) {
             prompt_system: classifierSystem.content,
             prompt_scoring: classifierScoring.content,
             relevance_policy: relevancePrompt.content,
+            agent_config_version: categoryAgentConfig.version,
+            agent_policy: buildAgentPolicyContext(categoryAgentConfig),
           },
           output: { category: categoryName, category_id: post.category_id, confidence: post.classification_confidence, reasoning: post.reasoning },
           latencyMs: post._classification_trace?.latencyMs || 0,

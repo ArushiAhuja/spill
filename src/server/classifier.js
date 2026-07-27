@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { getPrompt } from './prompts.js';
+import { buildAgentPolicyContext } from './organization-agent-config.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -11,7 +12,7 @@ function getOpenAI() {
 // posts: [{ id, source, title, body, score, created_at, ... }]
 // feedbackContext: string from getOrgFeedbackContext()
 // intelProfile: full intel_profile JSONB from organizations table
-export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null) {
+export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null) {
   const results = [];
   const batchSize = 5;
 
@@ -19,7 +20,7 @@ export async function classifyPosts(posts, categories, feedbackContext = null, o
     const batch = posts.slice(i, i + batchSize);
     try {
       if (process.env.OPENAI_API_KEY) {
-        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile, orgId);
+        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile, orgId, agentConfig);
         results.push(...classified);
       } else {
         results.push(...keywordClassify(batch, categories));
@@ -68,7 +69,7 @@ function keywordClassify(posts, categories) {
   });
 }
 
-async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null) {
+async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null) {
   const categoryList = categories.map(c =>
     `- ID: ${c.id} | Name: ${c.name} | Severity: ${c.severity || 0}/30 | Description: ${c.description || 'n/a'}`
   ).join('\n');
@@ -91,6 +92,8 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
   if (intel.industryVocabulary?.length) contextParts.push(`Industry terminology: ${intel.industryVocabulary.slice(0, 8).join(', ')}`);
   if (intel.highRiskTopics?.length) contextParts.push(`High-risk topics: ${intel.highRiskTopics.slice(0, 5).join(', ')}`);
   if (intel.competitorContext) contextParts.push(`Competitive context: ${intel.competitorContext}`);
+  const agentPolicy = buildAgentPolicyContext(agentConfig);
+  if (agentPolicy) contextParts.push(agentPolicy);
 
   const orgContext = orgName ? `Company being monitored: ${orgName}\n${contextParts.join('\n')}\n\n` : '';
 
@@ -116,8 +119,9 @@ Rules:
   const scoringContent = scoringRules || defaultScoring;
 
   const startedAt = Date.now();
+  const model = ['gpt-4o-mini', 'gpt-4o'].includes(agentConfig?.model) ? agentConfig.model : 'gpt-4o-mini';
   const response = await getOpenAI().chat.completions.create({
-    model: 'gpt-4o-mini',
+    model,
     max_tokens: 2500,
     messages: [
       {
@@ -217,7 +221,7 @@ ${scoringContent}`,
       cls.location_tag || null,
       cls.is_relevant !== false,
       clamp((cls.confidence ?? 65) / 100, 0, 1),
-      { model: 'gpt-4o-mini', latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw },
+      { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw },
     );
   });
 }

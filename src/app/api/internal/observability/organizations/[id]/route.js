@@ -3,7 +3,8 @@ import { getUser } from '../../../../../../server/api-auth.js';
 import { getObservabilityScope, scopeAllowsOrg } from '../../../../../../server/super-admin.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
 import { query } from '../../../../../../server/db.js';
-import { getPromptVersions, listPrompts, savePrompt, rollbackPrompt, PROMPT_KEYS } from '../../../../../../server/prompts.js';
+import { buildEffectivePromptPreview, getPromptVersions, listPrompts, safeMonitoringConfig, savePrompt, rollbackPrompt, PROMPT_KEYS } from '../../../../../../server/prompts.js';
+import { agentForPrompt, getOrganizationAgentConfigs } from '../../../../../../server/organization-agent-config.js';
 
 async function authorize(request, orgId) {
   await ensureMigrations();
@@ -17,13 +18,22 @@ async function authorize(request, orgId) {
 export async function GET(request, { params }) {
   try {
     const auth = await authorize(request, params.id); if (auth.error) return auth.error;
-    const { rows: [organization] } = await query(`SELECT o.id,o.name,o.slug,o.description,o.intel_profile,COALESCE(array_agg(sc.source) FILTER (WHERE sc.enabled),'{}') AS active_sources FROM organizations o LEFT JOIN source_configs sc ON sc.org_id=o.id WHERE o.id=$1 GROUP BY o.id`, [params.id]);
+    const { rows: [organization] } = await query(`SELECT o.id,o.name,o.slug,o.description,o.website,o.competitors,o.industry_keywords,o.partner_brands,o.intel_profile,COALESCE(array_agg(sc.source) FILTER (WHERE sc.enabled),'{}') AS active_sources FROM organizations o LEFT JOIN source_configs sc ON sc.org_id=o.id WHERE o.id=$1 GROUP BY o.id`, [params.id]);
     if (!organization) return NextResponse.json({ error: 'not found' }, { status: 404 });
     const { rows: [metrics] } = await query(`SELECT COUNT(*)::int total_events,COUNT(*) FILTER(WHERE decision='surfaced')::int surfaced,COUNT(*) FILTER(WHERE decision LIKE 'suppressed%')::int suppressed,ROUND(AVG((quality->>'relevance')::numeric),2) avg_relevance,ROUND(AVG(p.escalation_score)::numeric,1) avg_escalation,MAX(t.created_at) last_event_at FROM ai_traces t LEFT JOIN posts p ON p.id=t.post_id WHERE t.org_id=$1`, [params.id]);
-    const { rows: agents } = await query(`SELECT o.name,COALESCE(o.model,'deterministic') model,MAX(o.prompt_version) prompt_version,MAX(o.created_at) last_execution,COUNT(*)::int executions,COUNT(*) FILTER (WHERE o.error IS NULL)::int successful,COUNT(*) FILTER (WHERE o.error IS NOT NULL)::int failed FROM ai_observations o JOIN ai_traces t ON t.id=o.trace_id WHERE t.org_id=$1 GROUP BY o.name,o.model ORDER BY last_execution DESC`, [params.id]);
-    const prompts = await listPrompts(params.id);
+    const [{ rows: agents }, { rows: categories }, { rows: sourceConfigs }, agentConfigs] = await Promise.all([
+      query(`SELECT o.name,COALESCE(o.model,'deterministic') model,MAX(o.prompt_version) prompt_version,MAX(o.created_at) last_execution,COUNT(*)::int executions,COUNT(*) FILTER (WHERE o.error IS NULL)::int successful,COUNT(*) FILTER (WHERE o.error IS NOT NULL)::int failed FROM ai_observations o JOIN ai_traces t ON t.id=o.trace_id WHERE t.org_id=$1 GROUP BY o.name,o.model ORDER BY last_execution DESC`, [params.id]),
+      query('SELECT id,name,description,severity,color FROM categories WHERE org_id=$1 ORDER BY severity DESC,name', [params.id]),
+      query('SELECT source,enabled,config FROM source_configs WHERE org_id=$1 ORDER BY source', [params.id]),
+      getOrganizationAgentConfigs(params.id),
+    ]);
+    const safeSources = sourceConfigs.map(source => ({ source: source.source, enabled: source.enabled, config: safeMonitoringConfig(source.config) }));
+    const prompts = (await listPrompts(params.id)).map(prompt => ({
+      ...prompt,
+      effective_content: buildEffectivePromptPreview(prompt.prompt_key, prompt.content, organization, categories, safeSources, agentConfigs.find(config => config.agent_name === agentForPrompt(prompt.prompt_key)?.agent_name)),
+    }));
     const versions = {}; for (const p of prompts) versions[p.prompt_key] = await getPromptVersions(params.id, p.prompt_key, 10);
-    return NextResponse.json({ organization, metrics, agents, prompts, versions });
+    return NextResponse.json({ organization, metrics, agents, agent_configs: agentConfigs, prompts, versions, prompt_context: { categories, monitoring_sources: safeSources, inferred_intelligence: organization.intel_profile || {} } });
   } catch (err) { return NextResponse.json({ error: err.message }, { status: 500 }); }
 }
 

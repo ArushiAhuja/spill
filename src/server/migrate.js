@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 21;
+const MIGRATION_VERSION = 22;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -418,6 +418,43 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_observability_access_user ON observability_org_access(user_id, org_id)`);
+
+  // Organisation-aware agent registry. Prompt text remains versioned in prompts;
+  // this table holds the per-agent operating policy, examples and evaluation
+  // criteria that make two organisations run materially different AI behaviour.
+  await query(`
+    CREATE TABLE IF NOT EXISTS organization_agent_configs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      model TEXT NOT NULL DEFAULT 'gpt-4o-mini',
+      priority_instructions TEXT NOT NULL DEFAULT '',
+      ignore_instructions TEXT NOT NULL DEFAULT '',
+      escalation_rules JSONB NOT NULL DEFAULT '{}',
+      evaluation_criteria JSONB NOT NULL DEFAULT '{}',
+      examples JSONB NOT NULL DEFAULT '[]',
+      version INTEGER NOT NULL DEFAULT 1,
+      updated_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(org_id, agent_name)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_agent_configs_org ON organization_agent_configs(org_id, agent_name)`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS organization_agent_config_versions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      author_email TEXT,
+      change_summary TEXT,
+      config JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_agent_config_versions_org ON organization_agent_config_versions(org_id, agent_name, version DESC)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

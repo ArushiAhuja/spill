@@ -69,6 +69,92 @@ Rules:
   },
 };
 
+const CONTEXT_CONFIG_FIELDS = ['queries', 'context_queries', 'subreddits', 'auto_subreddits', 'company_handles', 'rss_urls', 'app_ids', 'custom_threads'];
+const INTEL_LABELS = {
+  brandKeywords: 'Brand terms', productKeywords: 'Products and services', customerPainPoints: 'Customer pain points',
+  typicalComplaints: 'Typical complaints', operationalRiskQueries: 'Operational risk queries', customerIntentQueries: 'Customer intent queries',
+  highRiskTopics: 'High-risk topics', industryVocabulary: 'Industry vocabulary', geographyTerms: 'Relevant geography',
+  exclusionTerms: 'Exclusion terms', icpDescription: 'Ideal customer profile', brandVoice: 'Brand voice', competitorContext: 'Competitive context',
+};
+
+function asList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(Boolean).map(String);
+}
+
+// This intentionally exposes monitoring configuration but never credentials. It is
+// used only by the internal dashboard's prompt preview and playground.
+export function safeMonitoringConfig(config = {}) {
+  const safe = {};
+  for (const field of CONTEXT_CONFIG_FIELDS) {
+    const values = asList(config?.[field]);
+    if (values.length) safe[field] = values.slice(0, 12);
+  }
+  return safe;
+}
+
+export function buildOrganizationPromptContext(org = {}, categories = [], sourceConfigs = []) {
+  const lines = ['ORGANISATION-SPECIFIC CONTEXT (automatically supplied by Spill)'];
+  lines.push(`Company: ${org.name || 'Unknown company'}`);
+  if (org.website) lines.push(`Website supplied by customer: ${org.website}`);
+  if (org.description) lines.push(`Company description supplied by customer: ${org.description}`);
+
+  const competitors = asList(org.competitors);
+  if (competitors.length) lines.push(`Competitors supplied by customer: ${competitors.join(', ')}`);
+  const industryKeywords = asList(org.industry_keywords);
+  if (industryKeywords.length) lines.push(`Monitoring keywords supplied by customer: ${industryKeywords.join(', ')}`);
+  const partners = asList(org.partner_brands);
+  if (partners.length) lines.push(`Partner brands supplied by customer: ${partners.join(', ')}`);
+
+  if (categories.length) {
+    lines.push(`Configured monitoring categories: ${categories.slice(0, 12).map(c => `${c.name}${c.description ? ` (${c.description})` : ''}`).join('; ')}`);
+  }
+
+  const monitoredSources = sourceConfigs.map(source => {
+    const config = safeMonitoringConfig(source.config);
+    const summary = Object.entries(config).map(([key, values]) => `${key}: ${values.join(', ')}`).join(' | ');
+    return `${source.source}${source.enabled ? '' : ' (disabled)'}${summary ? ` — ${summary}` : ''}`;
+  });
+  if (monitoredSources.length) lines.push(`Monitoring configuration: ${monitoredSources.join('\n- ')}`.replace('Monitoring configuration: ', 'Monitoring configuration:\n- '));
+
+  const intel = org.intel_profile || {};
+  const interpretation = [];
+  for (const [key, label] of Object.entries(INTEL_LABELS)) {
+    const value = intel[key];
+    const values = asList(value);
+    if (values.length) interpretation.push(`${label}: ${values.slice(0, 12).join(', ')}`);
+    else if (typeof value === 'string' && value.trim()) interpretation.push(`${label}: ${value.trim()}`);
+  }
+  if (interpretation.length) lines.push(`Spill's inferred intelligence:\n- ${interpretation.join('\n- ')}`);
+  return lines.join('\n');
+}
+
+// The stored prompt is the editable instruction. At execution time Spill adds
+// company context separately. This preview makes that otherwise hidden
+// organisation-specific behaviour inspectable without duplicating prompt rows.
+export function buildEffectivePromptPreview(promptKey, content, org = {}, categories = [], sourceConfigs = [], agentConfig = null) {
+  const context = buildOrganizationPromptContext(org, categories, sourceConfigs);
+  const runtimeNotes = {
+    relevance_filter: 'Runtime input also includes the candidate post and learned feedback exclusions.',
+    classifier_system: 'Runtime input also includes the current post, category IDs, scoring rules, and learned feedback patterns.',
+    classifier_scoring: 'Runtime input also includes the current post, category severity, and escalation dimensions.',
+    response_writer: 'Runtime input also includes the customer complaint, selected response tone, and any prior public replies.',
+    intel_extraction: 'This context is the customer input and current inferred profile available when onboarding or reprocessing runs.',
+  };
+  const responseRole = promptKey === 'response_writer'
+    ? `You are a social-media customer support agent for ${org.name || 'this company'}.\n`
+    : '';
+  const policy = agentConfig ? [
+    agentConfig.priority_instructions?.trim() ? `Prioritise: ${agentConfig.priority_instructions.trim()}` : '',
+    agentConfig.ignore_instructions?.trim() ? `Ignore or deprioritise: ${agentConfig.ignore_instructions.trim()}` : '',
+    Object.keys(agentConfig.escalation_rules || {}).length ? `Escalation rules: ${JSON.stringify(agentConfig.escalation_rules)}` : '',
+    Object.keys(agentConfig.evaluation_criteria || {}).length ? `Evaluation criteria: ${JSON.stringify(agentConfig.evaluation_criteria)}` : '',
+    Array.isArray(agentConfig.examples) && agentConfig.examples.length ? `Reviewed examples: ${JSON.stringify(agentConfig.examples.slice(0, 8))}` : '',
+  ].filter(Boolean) : [];
+  const policySection = policy.length ? `\n\nAGENT-SPECIFIC ORGANISATION POLICY\n${policy.map(line => `- ${line}`).join('\n')}` : '';
+  return `${responseRole}${content}\n\n---\n${context}${policySection}\n\nRuntime note: ${runtimeNotes[promptKey] || 'Runtime input is added by the corresponding Spill agent.'}`;
+}
+
 // In-memory cache: orgId → { key → { content, cachedAt } }
 const _cache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
