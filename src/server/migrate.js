@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 26;
+const MIGRATION_VERSION = 27;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -607,6 +607,33 @@ export async function ensureMigrations() {
   await query(`UPDATE ai_traces SET event_id = gen_random_uuid() WHERE event_id IS NULL`);
   await query(`ALTER TABLE ai_traces ALTER COLUMN event_id SET NOT NULL`);
   await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_event ON ai_traces(org_id,event_id)`);
+
+  // Feedback is a first-class learning signal. Retain the surfaced event ID
+  // alongside the post/trace reference so suppressed and reprocessed events
+  // remain attributable, then record every safe automated learning action.
+  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS event_id UUID`);
+  await query(`UPDATE post_feedback f SET event_id = t.event_id FROM ai_traces t WHERE f.trace_id = t.id AND f.event_id IS NULL`);
+  await query(`UPDATE post_feedback SET event_id = post_id WHERE event_id IS NULL AND post_id IS NOT NULL`);
+  await query(`UPDATE post_feedback SET event_id = gen_random_uuid() WHERE event_id IS NULL`);
+  await query(`ALTER TABLE post_feedback ALTER COLUMN event_id SET DEFAULT gen_random_uuid()`);
+  await query(`ALTER TABLE post_feedback ALTER COLUMN event_id SET NOT NULL`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_post_feedback_org_event ON post_feedback(org_id,event_id,created_at DESC)`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS feedback_learning_actions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      feedback_id UUID REFERENCES post_feedback(id) ON DELETE SET NULL,
+      event_id UUID NOT NULL,
+      agent_name TEXT NOT NULL,
+      action_type TEXT NOT NULL CHECK (action_type IN ('prompt_context','example_update','threshold_adjustment','category_refinement','evaluation_case')),
+      status TEXT NOT NULL DEFAULT 'applied' CHECK (status IN ('applied','skipped','pending','failed')),
+      before_state JSONB NOT NULL DEFAULT '{}',
+      after_state JSONB NOT NULL DEFAULT '{}',
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_feedback_learning_actions_org ON feedback_learning_actions(org_id,created_at DESC)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

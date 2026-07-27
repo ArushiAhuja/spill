@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../../../server/migrate.js';
+import { applyFeedbackLearning, updateOrgIntelligence } from '../../../../../../../server/feedback.js';
 
 const VALID_LABELS = new Set([
   // Exclusion signals
@@ -56,6 +57,12 @@ export async function POST(request, { params }) {
     );
     if (!existing.length) return NextResponse.json({ error: 'post not found' }, { status: 404 });
     const post = existing[0];
+    const { rows: [trace] } = post.ai_trace_id
+      ? await query('SELECT event_id FROM ai_traces WHERE id=$1 AND org_id=$2', [post.ai_trace_id, access.orgId])
+      : { rows: [] };
+    // Older/manual posts may not have a trace. The persisted post ID is then
+    // the stable surfaced-event identity rather than inventing a transient ID.
+    const eventId = trace?.event_id || post.id;
 
     const body = await request.json();
     const { label, explanation, field, old_value, new_value, severity_direction } = body;
@@ -194,11 +201,12 @@ export async function POST(request, { params }) {
 
     const agentName = ['wrong_category', 'missed_category'].includes(label) ? 'category'
       : ['wrong_severity', 'missed_context'].includes(label) ? 'severity' : 'relevance';
-    await query(
-      `INSERT INTO post_feedback (org_id, post_id, label, explanation, field, old_value, new_value, severity_direction, resulting_adjustment, agent_name, trace_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    const { rows: [feedback] } = await query(
+      `INSERT INTO post_feedback (org_id, post_id, event_id, label, explanation, field, old_value, new_value, severity_direction, resulting_adjustment, agent_name, trace_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       RETURNING *`,
       [
-        access.orgId, id, label || null, explanation || null,
+        access.orgId, id, eventId, label || null, explanation || null,
         insertField, insertOldValue, insertNewValue,
         severity_direction || null,
         resultingAdjustment,
@@ -220,7 +228,25 @@ export async function POST(request, { params }) {
       [access.orgId, id, agentName, JSON.stringify({ title: post.title, body: post.body, source: post.source }), JSON.stringify(expected), bucket, explanation || null, user.email || null]
     ).catch(() => {});
 
-    return NextResponse.json({ ok: true, resulting_adjustment: resultingAdjustment });
+    const learning = await applyFeedbackLearning({
+      orgId: access.orgId,
+      feedbackId: feedback.id,
+      eventId,
+      agentName,
+      post,
+      label,
+      explanation,
+      newValue: insertNewValue,
+      severityDirection: severity_direction,
+      authorEmail: user.email || null,
+    });
+
+    // The wider 60-day corpus is compiled into concise prompt terms and
+    // category severity signals. It is debounced internally, so normal usage
+    // does not cause one model call per click after the initial refresh.
+    await updateOrgIntelligence(access.orgId).catch(() => {});
+
+    return NextResponse.json({ ok: true, event_id: eventId, resulting_adjustment: resultingAdjustment, learning });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

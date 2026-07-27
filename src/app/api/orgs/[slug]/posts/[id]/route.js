@@ -8,6 +8,7 @@ import { logActivity } from '../../../../../../server/activity.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
 import { sendEmail } from '../../../../../../server/actions/emailer.js';
 import { sendSlack } from '../../../../../../server/actions/slack.js';
+import { applyFeedbackLearning } from '../../../../../../server/feedback.js';
 
 function isInMuteWindow(muteWindows) {
   if (!muteWindows?.length) return false;
@@ -152,19 +153,30 @@ export async function PATCH(request, { params }) {
 
     // Implicit training signals: save/dismiss actions are as informative as explicit labels.
     // signal_type='implicit' distinguishes these from explicit feedback panel submissions.
-    if (saved === true) {
-      query(
-        `INSERT INTO post_feedback (org_id, post_id, label, explanation, signal_type)
-         VALUES ($1, $2, 'saved', 'user bookmarked this post', 'implicit')`,
-        [access.orgId, id]
-      ).catch(() => {});
-    }
-    if (post_status === 'dismissed') {
-      query(
-        `INSERT INTO post_feedback (org_id, post_id, label, explanation, signal_type)
-         VALUES ($1, $2, 'not_relevant', 'user dismissed without feedback', 'implicit')`,
-        [access.orgId, id]
-      ).catch(() => {});
+    if (saved === true || post_status === 'dismissed') {
+      const implicitLabel = saved === true ? 'saved' : 'not_relevant';
+      const implicitReason = saved === true ? 'user bookmarked this post' : 'user dismissed without feedback';
+      const { rows: [trace] } = updated.ai_trace_id
+        ? await query('SELECT event_id FROM ai_traces WHERE id=$1 AND org_id=$2', [updated.ai_trace_id, access.orgId])
+        : { rows: [] };
+      const eventId = trace?.event_id || updated.id;
+      const { rows: [implicitFeedback] } = await query(
+        `INSERT INTO post_feedback (org_id, post_id, event_id, label, explanation, signal_type)
+         VALUES ($1, $2, $3, $4, $5, 'implicit') RETURNING *`,
+        [access.orgId, id, eventId, implicitLabel, implicitReason]
+      );
+      // Keep implicit signals in the same learning contract as explicit
+      // feedback. The DB default retains an event ID for historic/manual posts.
+      waitUntil(applyFeedbackLearning({
+        orgId: access.orgId,
+        feedbackId: implicitFeedback.id,
+        eventId: implicitFeedback.event_id || eventId,
+        agentName: 'relevance',
+        post: updated,
+        label: implicitLabel,
+        explanation: implicitReason,
+        authorEmail: user.email || null,
+      }).catch(err => console.warn('[feedback] implicit learning failed:', err.message)));
     }
 
     return NextResponse.json(updated);

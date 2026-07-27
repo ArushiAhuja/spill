@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { query } from './db.js';
+import { getOrganizationAgentConfig, saveOrganizationAgentConfig } from './organization-agent-config.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -18,6 +19,148 @@ function anonymizeText(text) {
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
     .replace(/(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '[phone]')
     .replace(/https?:\/\/[^\s)>]+/g, '[url]');
+}
+
+function compactText(value, max = 500) {
+  return anonymizeText(String(value || '').replace(/\s+/g, ' ').trim()).slice(0, max);
+}
+
+async function recordLearningAction({ orgId, feedbackId = null, eventId, agentName, actionType, status = 'applied', before = {}, after = {}, reason = null }) {
+  await query(
+    `INSERT INTO feedback_learning_actions
+       (org_id,feedback_id,event_id,agent_name,action_type,status,before_state,after_state,reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [orgId, feedbackId, eventId, agentName, actionType, status, JSON.stringify(before), JSON.stringify(after), compactText(reason, 1000) || null]
+  );
+}
+
+function expectedFromFeedback({ label, categoryId, newValue, severityDirection }) {
+  const isRelevant = !NEGATIVE_LABELS.has(label);
+  return {
+    relevant: isRelevant,
+    category_id: ['wrong_category', 'missed_category'].includes(label) ? (newValue || null) : (categoryId || null),
+    severity_direction: label === 'wrong_severity' ? (severityDirection || null) : null,
+  };
+}
+
+// Feedback can be incorporated immediately as a reviewed, organisation-scoped
+// example. We retain the original prompt template: a single user label should
+// never silently rewrite a production prompt.
+async function addReviewedExample({ orgId, feedbackId, eventId, agentName, post, label, explanation, newValue, severityDirection, authorEmail }) {
+  const config = await getOrganizationAgentConfig(orgId, agentName);
+  const expected = expectedFromFeedback({ label, categoryId: post.category_id, newValue, severityDirection });
+  const example = {
+    source: 'user_feedback',
+    feedback_id: feedbackId,
+    event_id: eventId,
+    input: {
+      title: compactText(post.title, 300),
+      body: compactText(post.body, 700),
+      source: post.source || null,
+    },
+    expected,
+    feedback: { label, reason: compactText(explanation, 400) || null },
+  };
+  const existing = Array.isArray(config.examples) ? config.examples : [];
+  const fingerprint = `${label}:${example.input.title.toLowerCase()}:${expected.category_id || ''}:${expected.severity_direction || ''}`;
+  const duplicate = existing.some(item => {
+    const prior = item?.input || {};
+    const priorExpected = item?.expected || {};
+    return `${item?.feedback?.label || ''}:${String(prior.title || '').toLowerCase()}:${priorExpected.category_id || ''}:${priorExpected.severity_direction || ''}` === fingerprint;
+  });
+
+  if (duplicate) {
+    await recordLearningAction({
+      orgId, feedbackId, eventId, agentName, actionType: 'example_update', status: 'skipped',
+      before: { example_count: existing.length }, after: { example_count: existing.length },
+      reason: 'An equivalent reviewed feedback example already exists for this agent.',
+    });
+    return false;
+  }
+
+  const nextExamples = [example, ...existing].slice(0, 20);
+  const saved = await saveOrganizationAgentConfig(
+    orgId,
+    agentName,
+    { examples: nextExamples },
+    authorEmail || 'spill-feedback-learning',
+    `Feedback learning: added reviewed ${label || 'user'} example for event ${eventId}`
+  );
+  await recordLearningAction({
+    orgId, feedbackId, eventId, agentName, actionType: 'example_update',
+    before: { example_count: existing.length, config_version: config.version || 0 },
+    after: { example_count: nextExamples.length, config_version: saved.version },
+    reason: explanation || `Added a reviewed ${label || 'user'} feedback example.`,
+  });
+  return true;
+}
+
+// Threshold changes are deliberately aggregate-only. Three or more consistent
+// corrections are required, a two-signal margin avoids ties, and the current
+// aggregate signature prevents the same feedback set from changing it twice.
+async function applyThresholdLearning({ orgId, feedbackId, eventId, agentName, explanation, authorEmail }) {
+  if (agentName !== 'severity') return false;
+  const { rows: [counts] } = await query(
+    `SELECT
+       COUNT(*) FILTER (WHERE label='false_positive' OR (label='wrong_severity' AND severity_direction='lower'))::int AS over_count,
+       COUNT(*) FILTER (WHERE label='missed_context' OR (label='wrong_severity' AND severity_direction='higher'))::int AS under_count
+     FROM post_feedback
+     WHERE org_id=$1 AND created_at > NOW()-INTERVAL '60 days'`,
+    [orgId]
+  );
+  const over = Number(counts?.over_count || 0);
+  const under = Number(counts?.under_count || 0);
+  const direction = over >= under + 2 && over >= 3 ? 'raise'
+    : under >= over + 2 && under >= 3 ? 'lower'
+      : null;
+  if (!direction) return false;
+
+  const config = await getOrganizationAgentConfig(orgId, 'severity');
+  const rules = config.escalation_rules && typeof config.escalation_rules === 'object' ? config.escalation_rules : {};
+  const signature = `${over}:${under}:${direction}`;
+  if (rules.feedback_learning_signature === signature) return false;
+  const baseline = Math.max(35, Math.min(85, Number(rules.escalation_threshold ?? (parseInt(process.env.ESCALATE_THRESHOLD, 10) || 60))));
+  const nextThreshold = Math.max(35, Math.min(85, baseline + (direction === 'raise' ? 5 : -5)));
+  if (nextThreshold === baseline) return false;
+
+  const saved = await saveOrganizationAgentConfig(
+    orgId,
+    'severity',
+    { escalation_rules: { ...rules, escalation_threshold: nextThreshold, feedback_learning_signature: signature, feedback_learning_updated_at: new Date().toISOString() } },
+    authorEmail || 'spill-feedback-learning',
+    `Feedback learning: ${direction === 'raise' ? 'raised' : 'lowered'} escalation threshold after ${over} over-escalation and ${under} under-escalation signals`
+  );
+  await recordLearningAction({
+    orgId, feedbackId, eventId, agentName: 'severity', actionType: 'threshold_adjustment',
+    before: { escalation_threshold: baseline, over_count: over, under_count: under, config_version: config.version || 0 },
+    after: { escalation_threshold: nextThreshold, over_count: over, under_count: under, config_version: saved.version },
+    reason: explanation || `Aggregate feedback ${direction === 'raise' ? 'indicated over-escalation' : 'indicated under-escalation'}.`,
+  });
+  return true;
+}
+
+// Applies the synchronous learning path for one submitted feedback record.
+// The asynchronous intelligence compiler still turns the wider 60-day corpus
+// into concise terms and category policy; this function makes the correction
+// useful to the next execution immediately.
+export async function applyFeedbackLearning({ orgId, feedbackId, eventId, agentName, post, label, explanation, newValue = null, severityDirection = null, authorEmail = null }) {
+  const result = { prompt_context: false, example_update: false, threshold_adjustment: false };
+  try {
+    await recordLearningAction({
+      orgId, feedbackId, eventId, agentName, actionType: 'prompt_context',
+      before: {}, after: { injected_by: 'getOrgFeedbackContext', label },
+      reason: explanation || `Feedback is available as organisation-scoped prompt context for ${agentName}.`,
+    });
+    result.prompt_context = true;
+    result.example_update = await addReviewedExample({ orgId, feedbackId, eventId, agentName, post, label, explanation, newValue, severityDirection, authorEmail });
+    result.threshold_adjustment = await applyThresholdLearning({ orgId, feedbackId, eventId, agentName, explanation, authorEmail });
+  } catch (err) {
+    console.warn('[feedback] immediate learning action failed:', err.message);
+    try {
+      await recordLearningAction({ orgId, feedbackId, eventId, agentName, actionType: 'prompt_context', status: 'failed', reason: err.message });
+    } catch {}
+  }
+  return result;
 }
 
 // Returns a concise, deduplicated context string (~200 tokens) for injection into
@@ -303,6 +446,28 @@ Rules:
             'UPDATE categories SET severity = $1 WHERE id = $2',
             [newSeverity, cat.id]
           ).catch(() => {});
+          // Keep the aggregate category refinement explainable. The action is
+          // linked to the most recent supporting feedback event where possible.
+          const { rows: [supportingFeedback] } = await query(
+            `SELECT f.id, f.event_id, f.explanation
+             FROM post_feedback f
+             JOIN posts p ON p.id = f.post_id
+             WHERE f.org_id=$1 AND p.category_id=$2
+             ORDER BY f.created_at DESC LIMIT 1`,
+            [orgId, cat.id]
+          ).catch(() => ({ rows: [] }));
+          if (supportingFeedback?.event_id) {
+            await recordLearningAction({
+              orgId,
+              feedbackId: supportingFeedback.id,
+              eventId: supportingFeedback.event_id,
+              agentName: 'category',
+              actionType: 'category_refinement',
+              before: { category_id: cat.id, category_name: cat.name, severity: cat.severity || 0 },
+              after: { category_id: cat.id, category_name: cat.name, severity: newSeverity, signal },
+              reason: supportingFeedback.explanation || `Aggregate category feedback signalled ${signal} severity.`,
+            }).catch(() => {});
+          }
         }
       }
     }
