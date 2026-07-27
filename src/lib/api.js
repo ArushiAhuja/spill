@@ -169,5 +169,6 @@ export const api = {
   setObservabilityOperator: (email, granted, org_id = null) => request('POST', '/internal/observability/operators', { email, granted, org_id }),
   getObservabilityOrg: (id) => request('GET', `/internal/observability/organizations/${id}`),
   saveObservabilityPrompt: (id, body) => request('PUT', `/internal/observability/organizations/${id}`, body),
+  rollbackObservabilityPrompt: (id, prompt_key, target_version) => request('PUT', `/internal/observability/organizations/${id}`, { prompt_key, target_version, action: 'rollback' }),
   runObservabilityPlayground: (body) => request('POST', '/internal/observability/playground', body),
 }

@@ -3,7 +3,7 @@ import { getUser } from '../../../../../../server/api-auth.js';
 import { getObservabilityScope, scopeAllowsOrg } from '../../../../../../server/super-admin.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
 import { query } from '../../../../../../server/db.js';
-import { getPromptVersions, listPrompts, savePrompt, PROMPT_KEYS } from '../../../../../../server/prompts.js';
+import { getPromptVersions, listPrompts, savePrompt, rollbackPrompt, PROMPT_KEYS } from '../../../../../../server/prompts.js';
 
 async function authorize(request, orgId) {
   await ensureMigrations();
@@ -30,9 +30,12 @@ export async function GET(request, { params }) {
 export async function PUT(request, { params }) {
   try {
     const auth = await authorize(request, params.id); if (auth.error) return auth.error;
-    const { prompt_key, content, change_summary } = await request.json();
-    if (!PROMPT_KEYS.includes(prompt_key) || !content?.trim()) return NextResponse.json({ error: 'valid prompt_key and content are required' }, { status: 400 });
-    const prompt = await savePrompt(params.id, prompt_key, content.trim(), auth.user.email, change_summary?.trim() || 'updated from internal console');
+    const { prompt_key, content, change_summary, action, target_version } = await request.json();
+    if (!PROMPT_KEYS.includes(prompt_key)) return NextResponse.json({ error: 'valid prompt_key is required' }, { status: 400 });
+    const prompt = action === 'rollback'
+      ? await rollbackPrompt(params.id, prompt_key, Number(target_version), auth.user.email)
+      : !content?.trim() ? null : await savePrompt(params.id, prompt_key, content.trim(), auth.user.email, change_summary?.trim() || 'updated from internal console');
+    if (!prompt) return NextResponse.json({ error: 'prompt content is required' }, { status: 400 });
     return NextResponse.json({ prompt });
   } catch (err) { return NextResponse.json({ error: err.message }, { status: 500 }); }
 }
