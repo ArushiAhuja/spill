@@ -47,7 +47,7 @@ The identical input was sent through the live category execution path:
 
 | Organisation | Prompt | Category outcome | Severity | Why it differs |
 | --- | --- | --- | --- | --- |
-| HomeLane | `global_category_v1` + HomeLane intelligence | `Delivery Issues` | 65/100 | Its compiler layer includes modular furniture, delivery guarantees, installation/delivery complaints, and interior-design taxonomy. |
+| HomeLane | `global_category_v1` + HomeLane intelligence | `Delivery Issues` | 67/100 | Its compiler layer includes modular furniture, delivery guarantees, installation/delivery complaints, and interior-design taxonomy. |
 | Swiggy | `global_category_v1` + Swiggy intelligence | `product complaint` | 72/100 | Its compiler layer includes food/quick-commerce services, order failures, refunds, and delivery-app taxonomy. |
 
 The model produced different reasoning and customer response suggestions as
