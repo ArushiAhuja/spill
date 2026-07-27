@@ -477,7 +477,7 @@ export async function runOrgCycle(orgId) {
         observations: [{
           name: 'Relevance Agent', kind: 'agent',
           model: post.relevance_tier === 'tier_3_ai_verified' ? relevanceAgentConfig.model : 'deterministic-policy',
-          promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance_filter' : null,
+          promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance' : null,
           promptVersion: post._relevance_trace?.prompt?.version ?? (post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null),
         input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', prompt_id: post._relevance_trace?.prompt?.id || null, prompt_hash: post._relevance_trace?.promptHash || null, source_agent_config_version: sourceAgentConfig.version, source_agent_policy: buildAgentPolicyContext(sourceAgentConfig), agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
           output: { is_relevant: post.is_relevant !== false }, latencyMs: 0,
@@ -485,7 +485,7 @@ export async function runOrgCycle(orgId) {
         }, {
           name: 'Category Detection Agent', kind: 'agent',
           model: post._classification_trace?.model || 'deterministic-keyword-fallback',
-          promptKey: 'classifier_system', promptVersion: post._classification_trace?.prompt?.version ?? classifierSystem.version,
+          promptKey: 'category', promptVersion: post._classification_trace?.prompt?.version ?? classifierSystem.version,
           input: {
             prompt_system: post._classification_trace?.promptSnapshot || classifierSystem.content,
             prompt_scoring: classifierScoring.content,
@@ -500,8 +500,8 @@ export async function runOrgCycle(orgId) {
           inputTokens: post._classification_trace?.inputTokens || null,
           outputTokens: post._classification_trace?.outputTokens || null,
         }, {
-          name: 'Severity Agent', kind: 'evaluator',
-          promptKey: 'classifier_scoring', promptVersion: post._classification_trace?.severityPrompt?.version ?? classifierScoring.version,
+          name: 'Severity Agent', kind: 'evaluator', model: 'deterministic-severity-v1',
+          promptKey: 'severity', promptVersion: post._classification_trace?.severityPrompt?.version ?? classifierScoring.version,
           input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0, agent_config_version: severityAgentConfig.version, agent_policy: buildAgentPolicyContext(severityAgentConfig), prompt_id: post._classification_trace?.severityPrompt?.id || null, prompt_hash: post._classification_trace?.severityPromptHash || null },
           output: { escalation_score: post.escalation_score, escalation_dimensions: post.escalation_dimensions, reason: post.reasoning, escalated: post.escalated }, latencyMs: 0,
         }, {

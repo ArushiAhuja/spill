@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 25;
+const MIGRATION_VERSION = 26;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -599,6 +599,14 @@ export async function ensureMigrations() {
   // of inventing a business rationale that was never captured.
   await query(`ALTER TABLE prompt_registry ADD COLUMN IF NOT EXISTS change_summary TEXT`);
   await query(`UPDATE prompt_registry SET change_summary = CASE WHEN prompt_id LIKE 'legacy_%' THEN 'Migrated from legacy organisation prompt; original change rationale was not recorded' WHEN scope='global' THEN 'Initial Spill-managed global prompt' ELSE 'Prompt version created' END WHERE change_summary IS NULL OR btrim(change_summary) = ''`);
+
+  // An observability event exists before (and independently from) persistence
+  // as a post. This keeps rejected/suppressed candidate traces addressable and
+  // guarantees a non-null event_id for every execution trace.
+  await query(`ALTER TABLE ai_traces ALTER COLUMN event_id SET DEFAULT gen_random_uuid()`);
+  await query(`UPDATE ai_traces SET event_id = gen_random_uuid() WHERE event_id IS NULL`);
+  await query(`ALTER TABLE ai_traces ALTER COLUMN event_id SET NOT NULL`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_event ON ai_traces(org_id,event_id)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

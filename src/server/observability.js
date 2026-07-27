@@ -39,7 +39,9 @@ export async function createEventTrace({ orgId, post, quality, decision, promptV
 }
 
 export async function linkTraceToPost(traceId, postId) {
-  if (traceId && postId) await query('UPDATE ai_traces SET post_id = $1, event_id = $1 WHERE id = $2', [postId, traceId]);
+  // event_id is allocated when the execution starts and remains stable even
+  // when a surfaced candidate later receives a persistent post ID.
+  if (traceId && postId) await query('UPDATE ai_traces SET post_id = $1 WHERE id = $2', [postId, traceId]);
 }
 
 // Observations may happen after the initial decision (for example, an alert
