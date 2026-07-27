@@ -7,6 +7,7 @@ import { query } from '../../../../../server/db.js';
 import { safeMonitoringConfig } from '../../../../../server/prompts.js';
 import { agentForPrompt, getOrganizationAgentConfigs } from '../../../../../server/organization-agent-config.js';
 import { composePrompt } from '../../../../../server/prompt-composer.js';
+import { getOrgFeedbackContext } from '../../../../../server/feedback.js';
 
 const MODELS = new Set(['gpt-4o-mini', 'gpt-4o']);
 const BUCKETS = new Set(['good_signal', 'bad_signal', 'borderline']);
@@ -84,11 +85,12 @@ export async function POST(request) {
     const model = MODELS.has(body.model) ? body.model : 'gpt-4o-mini';
     const { rows: cases } = await query(`SELECT * FROM agent_evaluation_cases WHERE org_id=$1 AND agent_name=$2 ORDER BY created_at DESC LIMIT 50`, [orgId, agentName]);
     if (!cases.length) return NextResponse.json({ error: 'no evaluation cases for this organisation and agent' }, { status: 400 });
-    const [{ rows: orgRows }, { rows: categories }, { rows: sources }, configs] = await Promise.all([
+    const [{ rows: orgRows }, { rows: categories }, { rows: sources }, configs, feedbackContext] = await Promise.all([
       query('SELECT id,name,description,website,competitors,industry_keywords,partner_brands,organization_profile,intel_profile FROM organizations WHERE id=$1', [orgId]),
       query('SELECT id,name,description,severity FROM categories WHERE org_id=$1', [orgId]),
       query('SELECT source,enabled,config FROM source_configs WHERE org_id=$1', [orgId]),
       getOrganizationAgentConfigs(orgId),
+      getOrgFeedbackContext(orgId),
     ]);
     const org = orgRows[0]; if (!org) return NextResponse.json({ error: 'organisation not found' }, { status: 404 });
     const config = configs.find(item => item.agent_name === agentName);
@@ -101,7 +103,7 @@ export async function POST(request) {
       const complaint = [input.title, input.body, input.text].filter(Boolean).join('\n') || JSON.stringify(input);
       const composition = await composePrompt({
         agentName, orgId, organization: org, categories, sourceConfigs: safeSources, agentConfig: config,
-        promptOverride: body.prompt_override?.trim() || null, model,
+        promptOverride: body.prompt_override?.trim() || null, feedbackContext, model,
         runtimeContext: { historical_case_id: evaluationCase.id, customer_signal: complaint, categories, output_rules: 'Return JSON only with relevant, category, confidence, customer_impact, operational_urgency, trust_risk, and reasoning.' },
       });
       resolvedPrompt ||= composition.prompt;
@@ -111,7 +113,11 @@ export async function POST(request) {
       ] });
       const raw = response.choices[0].message.content?.trim() || '';
       let actual; try { actual = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw); } catch { actual = { raw, parse_error: true, relevant: false, confidence: 0 }; }
-      results.push({ case_id: evaluationCase.id, bucket: evaluationCase.bucket, expected: evaluationCase.expected_output, actual });
+      const expected = { ...(evaluationCase.expected_output || {}) };
+      if (!expected.category && expected.category_id) {
+        expected.category = categories.find(category => category.id === expected.category_id)?.name || null;
+      }
+      results.push({ case_id: evaluationCase.id, bucket: evaluationCase.bucket, expected, actual });
     }
     const metrics = metricsFor(results);
     const { rows: [run] } = await query(

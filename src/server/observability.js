@@ -11,11 +11,11 @@ export function signalQuality(post, novelty = 1) {
   return { relevance, impact: Number(impact.toFixed(2)), confidence: Number(confidence.toFixed(2)), novelty, score };
 }
 
-export async function createEventTrace({ orgId, post, quality, decision, promptVersions = {}, observations = [], sourceObservation = null }) {
+export async function createEventTrace({ orgId, post, quality, decision, decisionEvidence = {}, promptVersions = {}, observations = [], sourceObservation = null }) {
   const { rows: [trace] } = await query(
-    `INSERT INTO ai_traces (org_id, source, status, decision, quality, metadata, trace_key)
-     VALUES ($1,$2,'completed',$3,$4,$5,'spill_trace_' || replace(gen_random_uuid()::text,'-','')) RETURNING id,trace_key`,
-    [orgId, post.source || null, decision, JSON.stringify(quality), JSON.stringify({ external_id: post.id, title: post.title || '', detected_query: post.detected_query || null, prompt_versions: promptVersions })]
+    `INSERT INTO ai_traces (org_id, source, status, decision, quality, decision_evidence, metadata, trace_key)
+     VALUES ($1,$2,'completed',$3,$4,$5,$6,'spill_trace_' || replace(gen_random_uuid()::text,'-','')) RETURNING id,trace_key,event_id`,
+    [orgId, post.source || null, decision, JSON.stringify(quality), JSON.stringify(decisionEvidence), JSON.stringify({ external_id: post.id, title: post.title || '', detected_query: post.detected_query || null, prompt_versions: promptVersions })]
   );
   const base = [{
     name: 'Source Processing Agent', kind: 'agent', model: sourceObservation?.model || null,

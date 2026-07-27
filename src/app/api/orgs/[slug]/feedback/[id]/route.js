@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
-import { updateOrgIntelligence } from '../../../../../../server/feedback.js';
+import { applyFeedbackLearning, updateOrgIntelligence } from '../../../../../../server/feedback.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
 
 // PATCH /api/orgs/[slug]/feedback/[id] — edit label and/or explanation
@@ -16,7 +16,9 @@ export async function PATCH(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const { rows: existing } = await query(
-      'SELECT id FROM post_feedback WHERE id = $1 AND org_id = $2',
+      `SELECT f.*,p.title,p.body,p.source,p.ai_trace_id,p.category_id
+       FROM post_feedback f LEFT JOIN posts p ON p.id=f.post_id
+       WHERE f.id = $1 AND f.org_id = $2`,
       [id, access.orgId]
     );
     if (!existing.length) return NextResponse.json({ error: 'not found' }, { status: 404 });
@@ -42,6 +44,21 @@ export async function PATCH(request, { params }) {
       `UPDATE post_feedback SET ${fields.join(', ')} WHERE id = $${idx} AND org_id = $${idx + 1} RETURNING *`,
       values
     );
+
+    const previous = existing[0];
+    const agentName = updated.agent_name || previous.agent_name || 'relevance';
+    await applyFeedbackLearning({
+      orgId: access.orgId,
+      feedbackId: updated.id,
+      eventId: updated.event_id || previous.event_id || previous.post_id,
+      agentName,
+      post: { id: previous.post_id, title: previous.title, body: previous.body, source: previous.source, category_id: previous.category_id, ai_trace_id: previous.ai_trace_id || updated.trace_id || null },
+      label: updated.label,
+      explanation: updated.explanation,
+      newValue: updated.new_value,
+      severityDirection: updated.severity_direction,
+      authorEmail: user.email || null,
+    });
 
     // Force intelligence refresh — user explicitly changed a signal, don't wait for debounce
     updateOrgIntelligence(access.orgId, { force: true }).catch(() => {});

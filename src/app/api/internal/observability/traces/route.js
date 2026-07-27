@@ -3,6 +3,7 @@ import { getUser } from '../../../../../server/api-auth.js';
 import { getObservabilityScope, scopeAllowsOrg } from '../../../../../server/super-admin.js';
 import { ensureMigrations } from '../../../../../server/migrate.js';
 import { query } from '../../../../../server/db.js';
+import { explainTrace } from '../../../../../server/event-intelligence.js';
 
 export async function GET(request) {
   try {
@@ -16,8 +17,9 @@ export async function GET(request) {
       const { rows: traces } = await query(`SELECT t.*, o.name AS org_name, p.title, p.body, p.url, p.escalation_score FROM ai_traces t JOIN organizations o ON o.id=t.org_id LEFT JOIN posts p ON p.id=t.post_id WHERE t.id::text=$1 OR t.trace_key=$1`, [traceId]);
       if (!traces[0]) return NextResponse.json({ error: 'not found' }, { status: 404 });
       if (!scopeAllowsOrg(scope, traces[0].org_id)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-      const { rows: observations } = await query('SELECT * FROM ai_observations WHERE trace_id=$1 ORDER BY created_at', [traceId]);
-      return NextResponse.json({ trace: traces[0], observations });
+      const { rows: observations } = await query('SELECT * FROM ai_observations WHERE trace_id=$1 ORDER BY created_at', [traces[0].id]);
+      const explanation = await explainTrace({ trace: traces[0], observations });
+      return NextResponse.json({ trace: traces[0], observations, ...explanation });
     }
     const params = []; const clauses = [];
     if (orgId) { params.push(orgId); clauses.push(`t.org_id=$${params.length}`); }

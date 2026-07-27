@@ -5,6 +5,7 @@ export const AGENT_DEFINITIONS = [
   { agent_name: 'relevance', prompt_key: 'relevance_filter', name: 'Relevance Agent', model: 'gpt-4o-mini' },
   { agent_name: 'category', prompt_key: 'classifier_system', name: 'Category Classification Agent', model: 'gpt-4o-mini' },
   { agent_name: 'severity', prompt_key: 'classifier_scoring', name: 'Severity Agent', model: 'deterministic-policy' },
+  { agent_name: 'summary', prompt_key: null, name: 'Executive Summary Agent', model: 'deterministic-policy' },
   { agent_name: 'trend', prompt_key: null, name: 'Trend Detection Agent', model: 'deterministic-cluster-v1' },
   { agent_name: 'response_writer', prompt_key: 'response_writer', name: 'Response Writer Agent', model: 'gpt-4o-mini' },
   { agent_name: 'intelligence_extraction', prompt_key: 'intel_extraction', name: 'Organisation Intelligence Agent', model: 'gpt-4o-mini' },

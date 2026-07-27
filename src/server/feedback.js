@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { query } from './db.js';
 import { getOrganizationAgentConfig, saveOrganizationAgentConfig } from './organization-agent-config.js';
+import { syncFeedbackAssessment, syncImprovementRecommendation } from './event-intelligence.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -62,8 +63,11 @@ async function addReviewedExample({ orgId, feedbackId, eventId, agentName, post,
     feedback: { label, reason: compactText(explanation, 400) || null },
   };
   const existing = Array.isArray(config.examples) ? config.examples : [];
+  // A feedback edit keeps the same feedback ID. Replace its prior training
+  // example rather than preserving stale label/reason text beside the revision.
+  const existingWithoutThisFeedback = existing.filter(item => item?.feedback_id !== feedbackId);
   const fingerprint = `${label}:${example.input.title.toLowerCase()}:${expected.category_id || ''}:${expected.severity_direction || ''}`;
-  const duplicate = existing.some(item => {
+  const duplicate = existingWithoutThisFeedback.some(item => {
     const prior = item?.input || {};
     const priorExpected = item?.expected || {};
     return `${item?.feedback?.label || ''}:${String(prior.title || '').toLowerCase()}:${priorExpected.category_id || ''}:${priorExpected.severity_direction || ''}` === fingerprint;
@@ -72,13 +76,13 @@ async function addReviewedExample({ orgId, feedbackId, eventId, agentName, post,
   if (duplicate) {
     await recordLearningAction({
       orgId, feedbackId, eventId, agentName, actionType: 'example_update', status: 'skipped',
-      before: { example_count: existing.length }, after: { example_count: existing.length },
+      before: { example_count: existing.length }, after: { example_count: existingWithoutThisFeedback.length },
       reason: 'An equivalent reviewed feedback example already exists for this agent.',
     });
     return false;
   }
 
-  const nextExamples = [example, ...existing].slice(0, 20);
+  const nextExamples = [example, ...existingWithoutThisFeedback].slice(0, 20);
   const saved = await saveOrganizationAgentConfig(
     orgId,
     agentName,
@@ -144,8 +148,13 @@ async function applyThresholdLearning({ orgId, feedbackId, eventId, agentName, e
 // into concise terms and category policy; this function makes the correction
 // useful to the next execution immediately.
 export async function applyFeedbackLearning({ orgId, feedbackId, eventId, agentName, post, label, explanation, newValue = null, severityDirection = null, authorEmail = null }) {
-  const result = { prompt_context: false, example_update: false, threshold_adjustment: false };
+  const result = { prompt_context: false, example_update: false, threshold_adjustment: false, assessment: [], recommendation: null };
   try {
+    result.assessment = await syncFeedbackAssessment({
+      orgId, eventId, traceId: post.ai_trace_id || null, postId: post.id || null,
+      feedbackId, agentName, label, reason: explanation,
+    });
+    result.recommendation = await syncImprovementRecommendation({ orgId, feedbackId, eventId, agentName, label, reason: explanation });
     await recordLearningAction({
       orgId, feedbackId, eventId, agentName, actionType: 'prompt_context',
       before: {}, after: { injected_by: 'getOrgFeedbackContext', label },

@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 27;
+const MIGRATION_VERSION = 28;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -634,6 +634,48 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_feedback_learning_actions_org ON feedback_learning_actions(org_id,created_at DESC)`);
+
+  // Explainability V1: a trace retains structured evidence for its final
+  // decision, while feedback produces agent-level correctness assessments and
+  // durable, organisation-scoped improvement recommendations.
+  await query(`ALTER TABLE ai_traces ADD COLUMN IF NOT EXISTS decision_evidence JSONB NOT NULL DEFAULT '{}'`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_event_created ON ai_traces(org_id,event_id,created_at DESC)`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS agent_event_assessments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL,
+      trace_id UUID REFERENCES ai_traces(id) ON DELETE SET NULL,
+      post_id UUID REFERENCES posts(id) ON DELETE SET NULL,
+      feedback_id UUID NOT NULL REFERENCES post_feedback(id) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      assessment_scope TEXT NOT NULL CHECK (assessment_scope IN ('surface_decision','agent_output')),
+      verdict TEXT NOT NULL CHECK (verdict IN ('correct','incorrect','unknown')),
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(feedback_id,agent_name,assessment_scope)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_event_assessments_lookup ON agent_event_assessments(org_id,event_id,created_at DESC)`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS agent_improvement_recommendations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      recommendation_key TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low','medium','high')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','applied','dismissed')),
+      recommendation TEXT NOT NULL,
+      evidence JSONB NOT NULL DEFAULT '{}',
+      source_feedback_id UUID REFERENCES post_feedback(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      applied_at TIMESTAMPTZ,
+      UNIQUE(org_id,agent_name,recommendation_key)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_improvement_recommendations_org ON agent_improvement_recommendations(org_id,status,updated_at DESC)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

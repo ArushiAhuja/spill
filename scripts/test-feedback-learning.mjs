@@ -5,6 +5,7 @@ import { query } from '../src/server/db.js';
 import { applyFeedbackLearning, getOrgFeedbackContext } from '../src/server/feedback.js';
 import { getOrganizationAgentConfig } from '../src/server/organization-agent-config.js';
 import { composePrompt } from '../src/server/prompt-composer.js';
+import { getEventAssessmentSummary } from '../src/server/event-intelligence.js';
 
 const suffix = randomUUID().slice(0, 8);
 const slug = `feedback-learning-test-${suffix}`;
@@ -83,6 +84,10 @@ async function run() {
     const severityConfig = await getOrganizationAgentConfig(orgId, 'severity');
     const defaultThreshold = parseInt(process.env.ESCALATE_THRESHOLD, 10) || 60;
     assert.equal(severityConfig.escalation_rules.escalation_threshold, Math.min(85, Math.max(35, defaultThreshold) + 5));
+    const assessment = await getEventAssessmentSummary({ orgId, eventId: trace.event_id });
+    assert.equal(assessment.review_status, 'reviewed');
+    assert.equal(assessment.surface_decision.verdict, 'incorrect');
+    assert.equal(assessment.agents.severity.verdict, 'incorrect');
 
     const { rows: actions } = await query(
       `SELECT action_type,status,event_id FROM feedback_learning_actions WHERE org_id=$1`, [orgId]
@@ -91,11 +96,17 @@ async function run() {
     assert.ok(actions.some(action => action.action_type === 'example_update' && action.status === 'applied'));
     assert.ok(actions.some(action => action.action_type === 'threshold_adjustment' && action.status === 'applied'));
     assert.ok(actions.every(action => action.event_id));
+    const { rows: recommendations } = await query(
+      `SELECT agent_name,recommendation_key,status FROM agent_improvement_recommendations WHERE org_id=$1`, [orgId]
+    );
+    assert.ok(recommendations.some(row => row.agent_name === 'category' && row.recommendation_key === 'refine_category_policy'));
+    assert.ok(recommendations.some(row => row.agent_name === 'severity' && row.recommendation_key === 'calibrate_escalation'));
 
     console.log('✓ feedback stores an organisation-scoped event ID and agent');
     console.log('✓ feedback is injected into composed prompts and reviewed examples');
     console.log('✓ three coherent severity corrections adjust the live organisation threshold');
     console.log('✓ every applied learning action is auditable');
+    console.log('✓ feedback produces event correctness and organisation-agent improvement recommendations');
   } finally {
     if (orgId) await query('DELETE FROM organizations WHERE id=$1', [orgId]);
   }

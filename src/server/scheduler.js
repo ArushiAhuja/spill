@@ -234,11 +234,12 @@ export async function runOrgCycle(orgId) {
 
     const intel = { ...(org?.organization_profile || {}), ...(org?.intel_profile || {}) };
     const feedbackContext = await getOrgFeedbackContext(orgId).catch(() => null);
-    const [sourceAgentConfig, relevanceAgentConfig, categoryAgentConfig, severityAgentConfig, trendAgentConfig] = await Promise.all([
+    const [sourceAgentConfig, relevanceAgentConfig, categoryAgentConfig, severityAgentConfig, summaryAgentConfig, trendAgentConfig] = await Promise.all([
       getOrganizationAgentConfig(orgId, 'source_understanding'),
       getOrganizationAgentConfig(orgId, 'relevance'),
       getOrganizationAgentConfig(orgId, 'category'),
       getOrganizationAgentConfig(orgId, 'severity'),
+      getOrganizationAgentConfig(orgId, 'summary'),
       getOrganizationAgentConfig(orgId, 'trend'),
     ]);
     const intelBrandKws = (intel.brandKeywords || []).map(k => k.toLowerCase());
@@ -460,11 +461,18 @@ export async function runOrgCycle(orgId) {
       const categoryName = categories.find(c => c.id === post.category_id)?.name || 'Uncategorized';
       post.executive_summary = executiveSummary(post, categoryName);
       const [summaryComposition, trendComposition] = await Promise.all([
-        composePrompt({ agentName: 'summary', orgId, organization: org, categories, sourceConfigs, agentConfig: trendAgentConfig, model: 'deterministic-summary-v1', runtimeContext: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, signal: { title: post.title, body: post.body } } }),
+        composePrompt({ agentName: 'summary', orgId, organization: org, categories, sourceConfigs, agentConfig: summaryAgentConfig, model: 'deterministic-summary-v1', runtimeContext: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, signal: { title: post.title, body: post.body } } }),
         composePrompt({ agentName: 'trend', orgId, organization: org, categories, sourceConfigs, agentConfig: trendAgentConfig, model: 'deterministic-cluster-v1', runtimeContext: { category: categoryName, title: post.title, body: post.body, source: post.source } }),
       ]);
       post.ai_trace_id = await createEventTrace({
         orgId, post, quality, decision,
+        decisionEvidence: {
+          detected_query: post.detected_query || null,
+          relevance: { tier: post.relevance_tier || null, is_relevant: post.is_relevant !== false },
+          category: { id: post.category_id || null, name: categoryName, confidence: post.classification_confidence ?? null, reasoning: post.reasoning || null },
+          severity: { escalation_score: post.escalation_score ?? null, escalated: !!post.escalated, dimensions: post.escalation_dimensions || {} },
+          quality_gate: { score: quality.score, threshold: qualityThreshold, decision },
+        },
         sourceObservation: {
           promptKey: 'source_understanding', promptVersion: sourceComposition.prompt.version, model: sourceComposition.model,
           promptSnapshot: { id: sourceComposition.prompt.id, hash: sourceComposition.promptHash, content: sourceComposition.finalPrompt },
@@ -507,7 +515,7 @@ export async function runOrgCycle(orgId) {
         }, {
           name: 'Executive Summary Agent', kind: 'agent', model: 'deterministic-summary-v1',
           promptKey: 'summary', promptVersion: summaryComposition.prompt.version,
-          input: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, prompt_id: summaryComposition.prompt.id, prompt_hash: summaryComposition.promptHash, trend_prompt_id: trendComposition.prompt.id, trend_prompt_version: trendComposition.prompt.version, trend_agent_config_version: trendAgentConfig.version, trend_agent_policy: buildAgentPolicyContext(trendAgentConfig) },
+          input: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, prompt_id: summaryComposition.prompt.id, prompt_hash: summaryComposition.promptHash, summary_agent_config_version: summaryAgentConfig.version, summary_agent_policy: buildAgentPolicyContext(summaryAgentConfig), trend_prompt_id: trendComposition.prompt.id, trend_prompt_version: trendComposition.prompt.version, trend_agent_config_version: trendAgentConfig.version, trend_agent_policy: buildAgentPolicyContext(trendAgentConfig) },
           output: { executive_summary: post.executive_summary }, latencyMs: 0,
         }, {
           name: 'Signal quality gate', kind: 'evaluator',
