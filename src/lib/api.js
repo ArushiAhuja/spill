@@ -170,5 +170,11 @@ export const api = {
   getObservabilityOrg: (id) => request('GET', `/internal/observability/organizations/${id}`),
   saveObservabilityPrompt: (id, body) => request('PUT', `/internal/observability/organizations/${id}`, body),
   rollbackObservabilityPrompt: (id, prompt_key, target_version) => request('PUT', `/internal/observability/organizations/${id}`, { prompt_key, target_version, action: 'rollback' }),
+  saveObservabilityAgentConfig: (id, agent_name, config, change_summary = '') => request('PUT', `/internal/observability/organizations/${id}`, { action: 'save_agent_config', agent_name, config, change_summary }),
+  saveObservabilityProfile: (id, organization_profile) => request('PUT', `/internal/observability/organizations/${id}`, { action: 'save_organization_profile', organization_profile }),
   runObservabilityPlayground: (body) => request('POST', '/internal/observability/playground', body),
+  getObservabilityEvaluations: (org_id) => request('GET', `/internal/observability/evaluations?org_id=${encodeURIComponent(org_id)}`),
+  createObservabilityEvaluationCase: (body) => request('POST', '/internal/observability/evaluations', { action: 'create_case', ...body }),
+  runObservabilityEvaluation: (body) => request('POST', '/internal/observability/evaluations', { action: 'run', ...body }),
+  createObservabilityExperiment: (body) => request('POST', '/internal/observability/evaluations', { action: 'create_experiment', ...body }),
 }

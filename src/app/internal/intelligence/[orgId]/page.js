@@ -19,6 +19,8 @@ export default function OrgIntelligencePage({ params }) {
   const [model, setModel] = useState('gpt-4o-mini')
   const [run, setRun] = useState(null)
   const [running, setRunning] = useState(false)
+  const [evaluations, setEvaluations] = useState(null)
+  const [evaluating, setEvaluating] = useState(false)
 
   function choose(prompt) {
     setSelected(prompt.prompt_key)
@@ -27,8 +29,9 @@ export default function OrgIntelligencePage({ params }) {
   }
 
   async function load() {
-    const next = await api.getObservabilityOrg(id)
+    const [next, evaluationData] = await Promise.all([api.getObservabilityOrg(id), api.getObservabilityEvaluations(id)])
     setData(next)
+    setEvaluations(evaluationData)
     if (!selected && next.prompts?.[0]) choose(next.prompts[0])
   }
 
@@ -64,6 +67,32 @@ export default function OrgIntelligencePage({ params }) {
     } catch (e) { setError(e.message) } finally { setRunning(false) }
   }
 
+  async function saveAgentConfig(agentName, config, changeSummary) {
+    setSaving(true)
+    try { await api.saveObservabilityAgentConfig(id, agentName, config, changeSummary); await load() } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  async function saveProfile(profile) {
+    setSaving(true)
+    try { await api.saveObservabilityProfile(id, profile); await load() } catch (e) { setError(e.message) } finally { setSaving(false) }
+  }
+
+  async function runEvaluation() {
+    const agent = data.agent_configs?.find(config => config.prompt_key === selected) || data.agent_configs?.find(config => config.agent_name === 'category')
+    setEvaluating(true)
+    try { await api.runObservabilityEvaluation({ org_id: id, agent_name: agent?.agent_name || 'category', prompt_key: selected || 'classifier_system', model }); await load() } catch (e) { setError(e.message) } finally { setEvaluating(false) }
+  }
+
+  async function createEvaluationCase(input, expected_output, bucket) {
+    const agent = data.agent_configs?.find(config => config.prompt_key === selected) || data.agent_configs?.find(config => config.agent_name === 'category')
+    try { await api.createObservabilityEvaluationCase({ org_id: id, agent_name: agent?.agent_name || 'category', input, expected_output, bucket }); await load() } catch (e) { setError(e.message) }
+  }
+
+  async function saveExperiment() {
+    const agent = data.agent_configs?.find(config => config.prompt_key === selected) || data.agent_configs?.find(config => config.agent_name === 'category')
+    try { await api.createObservabilityExperiment({ org_id: id, agent_name: agent?.agent_name || 'category', prompt_key: selected || 'classifier_system', baseline_content: content, candidate_content: override, baseline_model: model, candidate_model: model }); await load() } catch (e) { setError(e.message) }
+  }
+
   if (error) return <main style={{ padding: 40, color: '#f87171', background: '#0d0f1a', minHeight: '100vh' }}>Internal dashboard: {error}</main>
   if (!data) return <main style={{ padding: 40, color: '#94a3b8', background: '#0d0f1a', minHeight: '100vh' }}>Loading organisation intelligence…</main>
 
@@ -97,7 +126,11 @@ export default function OrgIntelligencePage({ params }) {
       </div>
     </section>
 
-    <ContextPanel organization={data.organization} context={data.prompt_context} agentConfigs={data.agent_configs} />
+    <RecentTraces traces={data.recent_traces} />
+
+    <ContextPanel organization={data.organization} context={data.prompt_context} agentConfigs={data.agent_configs} saving={saving} onSaveProfile={saveProfile} />
+    <AgentConfigPanel configs={data.agent_configs} versions={data.agent_config_versions} saving={saving} onSave={saveAgentConfig} />
+    <EvaluationPanel evaluations={evaluations} running={evaluating} onRun={runEvaluation} onCreate={createEvaluationCase} />
 
     <section style={{ display: 'grid', gridTemplateColumns: 'minmax(190px,260px) minmax(0,1fr)', gap: 16, alignItems: 'start' }}>
       <div style={card}>
@@ -137,15 +170,54 @@ export default function OrgIntelligencePage({ params }) {
           <textarea value={override} onChange={e => setOverride(e.target.value)} rows={4} placeholder="Optional alternative instruction" style={{ width: '100%', boxSizing: 'border-box', marginTop: 8, background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8 }} />
           <select value={model} onChange={e => setModel(e.target.value)} style={{ marginTop: 8, background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8 }}><option>gpt-4o-mini</option><option>gpt-4o</option></select>
           <button disabled={running || !complaint.trim()} onClick={execute} style={{ marginLeft: 8, padding: '8px 12px', background: '#2563eb', color: 'white', border: 0, borderRadius: 6, cursor: 'pointer' }}>{running ? 'running…' : 'run comparison'}</button>
-          {run && <div style={{ display: 'grid', gridTemplateColumns: run.alternative ? '1fr 1fr' : '1fr', gap: 8, marginTop: 12 }}><RunResult title="Current" result={run.current} />{run.alternative && <RunResult title="Alternative" result={run.alternative} />}</div>}
+          {run && <><div style={{ display: 'grid', gridTemplateColumns: run.alternative ? '1fr 1fr' : '1fr', gap: 8, marginTop: 12 }}><RunResult title="Current" result={run.current} />{run.alternative && <RunResult title="Alternative" result={run.alternative} />}</div>{run.alternative && <button onClick={saveExperiment} style={{ marginTop: 8, padding: '7px 10px', background: 'transparent', color: '#93c5fd', border: '1px solid #475569', borderRadius: 6, cursor: 'pointer' }}>save A/B experiment</button>}</>}
         </div>
       </div>
     </section>
   </main>
 }
 
-function ContextPanel({ organization, context, agentConfigs }) {
-  const customerInput = { description: organization.description || null, website: organization.website || null, competitors: organization.competitors || [], industry_keywords: organization.industry_keywords || [], partner_brands: organization.partner_brands || [] }
+function RecentTraces({ traces }) {
+  return <section style={{ ...card, marginBottom: 18 }}><div style={{ ...mono, fontSize: 10, color: '#94a3b8' }}>RECENT TRACES</div>{traces?.length ? traces.map(trace => <div key={trace.id} style={{ borderTop: '1px solid #1e2535', padding: '8px 0', fontSize: 11 }}><span style={{ color: trace.decision === 'surfaced' ? '#4ade80' : '#fbbf24' }}>{trace.decision}</span> · {trace.title || 'candidate signal'}<div style={{ ...mono, color: '#64748b', fontSize: 9, marginTop: 3 }}>{trace.trace_key || trace.id} · {trace.source} · {new Date(trace.created_at).toLocaleString()}</div></div>) : <p style={{ color: '#64748b', fontSize: 12 }}>No recorded traces yet.</p>}</section>
+}
+
+function AgentConfigPanel({ configs, versions, saving, onSave }) {
+  const [selected, setSelected] = useState(configs?.[0]?.agent_name || '')
+  const config = configs?.find(item => item.agent_name === selected) || configs?.[0]
+  const [draft, setDraft] = useState('')
+  const [summary, setSummary] = useState('')
+  useEffect(() => { if (config) setDraft(JSON.stringify({ enabled: config.enabled, model: config.model, priority_instructions: config.priority_instructions, ignore_instructions: config.ignore_instructions, escalation_rules: config.escalation_rules, evaluation_criteria: config.evaluation_criteria, examples: config.examples }, null, 2)) }, [selected, configs])
+  if (!config) return null
+  async function save() { try { await onSave(config.agent_name, JSON.parse(draft), summary) } catch { /* parent reports parse/API error */ } }
+  return <section style={{ ...card, marginBottom: 18 }}>
+    <div style={{ ...mono, fontSize: 10, color: '#94a3b8' }}>AGENT CONFIGURATION REGISTRY</div>
+    <p style={{ fontSize: 12, color: '#94a3b8' }}>These policies are compiled into organisation-specific runtime instructions. Saving creates an immutable agent-config version.</p>
+    <select value={selected} onChange={e => setSelected(e.target.value)} style={{ background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8 }}>{configs.map(item => <option key={item.agent_name} value={item.agent_name}>{item.name}</option>)}</select>
+    <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={11} style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 8, background: '#0d0f1a', color: '#d1d5db', border: '1px solid #243047', borderRadius: 7, padding: 10, fontSize: 11, fontFamily: 'ui-monospace,monospace' }} />
+    <input value={summary} onChange={e => setSummary(e.target.value)} placeholder="Why this agent policy changed" style={{ marginTop: 8, width: '100%', boxSizing: 'border-box', background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8, fontSize: 12 }} />
+    <button disabled={saving} onClick={save} style={{ marginTop: 8, padding: '8px 12px', background: '#2563eb', color: 'white', border: 0, borderRadius: 6, cursor: 'pointer' }}>{saving ? 'saving…' : 'save agent configuration'}</button>
+    <div style={{ marginTop: 12, fontSize: 11, color: '#64748b' }}>Version history: {(versions?.[config.agent_name] || []).map(v => `v${v.version}`).join(' · ') || 'no saved organisation override yet'}</div>
+  </section>
+}
+
+function EvaluationPanel({ evaluations, running, onRun, onCreate }) {
+  const latest = evaluations?.runs?.[0]
+  const [text, setText] = useState('')
+  const [expected, setExpected] = useState('{\n  "relevant": true,\n  "category": ""\n}')
+  const [bucket, setBucket] = useState('good_signal')
+  async function create() { try { await onCreate({ text }, JSON.parse(expected), bucket); setText('') } catch { /* invalid JSON is not persisted */ } }
+  return <section style={{ ...card, marginBottom: 18 }}>
+    <div style={{ ...mono, fontSize: 10, color: '#94a3b8' }}>QUALITY & EVALUATION</div>
+    <p style={{ fontSize: 12, color: '#94a3b8' }}>Feedback automatically becomes labelled good-signal, bad-signal, or borderline evaluation cases. Run the selected prompt against that organisation-specific dataset.</p>
+    <div style={{ fontSize: 12, color: '#cbd5e1' }}>{evaluations?.cases?.length || 0} labelled cases · {evaluations?.runs?.length || 0} saved runs</div>
+    <button disabled={running || !(evaluations?.cases?.length)} onClick={onRun} style={{ marginTop: 8, padding: '8px 12px', background: '#2563eb', color: 'white', border: 0, borderRadius: 6, cursor: 'pointer' }}>{running ? 'evaluating…' : 'run evaluation dataset'}</button>
+    <details style={{ marginTop: 10 }}><summary style={{ cursor: 'pointer', fontSize: 11, color: '#60a5fa' }}>add labelled evaluation case</summary><textarea value={text} onChange={e => setText(e.target.value)} rows={3} placeholder="Historical customer signal" style={{ marginTop: 8, width: '100%', boxSizing: 'border-box', background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8 }} /><textarea value={expected} onChange={e => setExpected(e.target.value)} rows={4} style={{ marginTop: 8, width: '100%', boxSizing: 'border-box', background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8, fontFamily: 'ui-monospace,monospace', fontSize: 11 }} /><select value={bucket} onChange={e => setBucket(e.target.value)} style={{ marginTop: 8, background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 7 }}><option value="good_signal">good signal</option><option value="bad_signal">bad signal</option><option value="borderline">borderline</option></select><button disabled={!text.trim()} onClick={create} style={{ marginLeft: 8, padding: '7px 10px', background: '#2563eb', color: 'white', border: 0, borderRadius: 6, cursor: 'pointer' }}>save case</button></details>
+    {latest && <pre style={{ marginTop: 10, whiteSpace: 'pre-wrap', fontSize: 10, color: '#94a3b8', background: '#0d0f1a', padding: 8, borderRadius: 6 }}>{JSON.stringify(latest.metrics, null, 2)}</pre>}
+  </section>
+}
+
+function ContextPanel({ organization, context, agentConfigs, saving, onSaveProfile }) {
+  const customerInput = { description: organization.description || null, website: organization.website || null, competitors: organization.competitors || [], industry_keywords: organization.industry_keywords || [], partner_brands: organization.partner_brands || [], organization_profile: organization.organization_profile || {} }
   return <section style={{ ...card, marginBottom: 18 }}>
     <div style={{ ...mono, fontSize: 10, color: '#94a3b8' }}>ORGANISATION CONTEXT APPLIED TO EVERY AGENT</div>
     <p style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>The prompt editor holds reusable instructions. Spill automatically adds this company context at runtime, so a global instruction is still personalised for {organization.name}.</p>
@@ -156,7 +228,15 @@ function ContextPanel({ organization, context, agentConfigs }) {
       <ContextValue title="monitoring configuration (credentials excluded)" value={context?.monitoring_sources || []} />
       <ContextValue title="organisation-specific agent configuration" value={agentConfigs || []} />
     </div>
+    <ProfileEditor profile={organization.organization_profile || {}} saving={saving} onSave={onSaveProfile} />
   </section>
+}
+
+function ProfileEditor({ profile, saving, onSave }) {
+  const [draft, setDraft] = useState(JSON.stringify(profile, null, 2))
+  useEffect(() => setDraft(JSON.stringify(profile, null, 2)), [profile])
+  async function save() { try { await onSave(JSON.parse(draft)) } catch { /* invalid JSON is intentionally not persisted */ } }
+  return <details style={{ marginTop: 12 }}><summary style={{ cursor: 'pointer', fontSize: 11, color: '#60a5fa' }}>edit human-approved organisation profile</summary><p style={{ fontSize: 11, color: '#94a3b8' }}>Use fields such as <code>industry</code>, <code>products_services</code>, <code>customer_personas</code>, <code>business_functions</code>, <code>priority_issues</code>, <code>risk_categories</code>, <code>terminology</code>, and <code>escalation_rules</code>.</p><textarea value={draft} onChange={e => setDraft(e.target.value)} rows={10} style={{ width: '100%', boxSizing: 'border-box', background: '#0d0f1a', color: '#d1d5db', border: '1px solid #243047', borderRadius: 7, padding: 10, fontSize: 11, fontFamily: 'ui-monospace,monospace' }} /><button disabled={saving} onClick={save} style={{ marginTop: 8, padding: '7px 10px', background: '#2563eb', color: 'white', border: 0, borderRadius: 6, cursor: 'pointer' }}>{saving ? 'saving…' : 'save organisation profile'}</button></details>
 }
 
 function ContextValue({ title, value }) {

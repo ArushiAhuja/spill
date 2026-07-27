@@ -12,7 +12,7 @@ function getOpenAI() {
 // posts: [{ id, source, title, body, score, created_at, ... }]
 // feedbackContext: string from getOrgFeedbackContext()
 // intelProfile: full intel_profile JSONB from organizations table
-export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null) {
+export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null, severityConfig = null) {
   const results = [];
   const batchSize = 5;
 
@@ -20,7 +20,7 @@ export async function classifyPosts(posts, categories, feedbackContext = null, o
     const batch = posts.slice(i, i + batchSize);
     try {
       if (process.env.OPENAI_API_KEY) {
-        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile, orgId, agentConfig);
+        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile, orgId, agentConfig, severityConfig);
         results.push(...classified);
       } else {
         results.push(...keywordClassify(batch, categories));
@@ -69,7 +69,7 @@ function keywordClassify(posts, categories) {
   });
 }
 
-async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null) {
+async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null, severityConfig = null) {
   const categoryList = categories.map(c =>
     `- ID: ${c.id} | Name: ${c.name} | Severity: ${c.severity || 0}/30 | Description: ${c.description || 'n/a'}`
   ).join('\n');
@@ -92,6 +92,10 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
   if (intel.industryVocabulary?.length) contextParts.push(`Industry terminology: ${intel.industryVocabulary.slice(0, 8).join(', ')}`);
   if (intel.highRiskTopics?.length) contextParts.push(`High-risk topics: ${intel.highRiskTopics.slice(0, 5).join(', ')}`);
   if (intel.competitorContext) contextParts.push(`Competitive context: ${intel.competitorContext}`);
+  if (intel.priority_issues?.length) contextParts.push(`Human-approved priority issues: ${intel.priority_issues.slice(0, 10).join('; ')}`);
+  if (intel.risk_categories?.length) contextParts.push(`Human-approved risk categories: ${intel.risk_categories.slice(0, 10).join(', ')}`);
+  if (intel.products_services?.length) contextParts.push(`Products/services: ${intel.products_services.slice(0, 10).join(', ')}`);
+  if (intel.terminology?.length) contextParts.push(`Organisation terminology: ${intel.terminology.slice(0, 12).join(', ')}`);
   const agentPolicy = buildAgentPolicyContext(agentConfig);
   if (agentPolicy) contextParts.push(agentPolicy);
 
@@ -221,14 +225,14 @@ ${scoringContent}`,
       cls.location_tag || null,
       cls.is_relevant !== false,
       clamp((cls.confidence ?? 65) / 100, 0, 1),
-      { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw },
+      { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw }, severityConfig,
     );
   });
 }
 
 function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 
-export function scorePost(post, category, dimensions, reasoning, responseTemplate = null, locationTag = null, isRelevant = true, classificationConfidence = 0.65, trace = null) {
+export function scorePost(post, category, dimensions, reasoning, responseTemplate = null, locationTag = null, isRelevant = true, classificationConfidence = 0.65, trace = null, severityConfig = null) {
   const { customer_impact = 0, operational_urgency = 0, trust_risk = 0, virality_potential = 0 } = dimensions;
   const severity = category?.severity || 0;
   const engagementScore = Math.min(20, Math.log1p(post.score || 0) * 4);
@@ -236,8 +240,13 @@ export function scorePost(post, category, dimensions, reasoning, responseTemplat
   const recencyScore = Math.max(0, 20 - ageHours * 2);
 
   // Weighted urgency: customer impact carries the most weight, then operational, then trust
+  const rules = severityConfig?.escalation_rules || {};
+  const impactWeight = Number(rules.customer_impact_weight ?? .40);
+  const urgencyWeight = Number(rules.operational_urgency_weight ?? .35);
+  const trustWeight = Number(rules.trust_risk_weight ?? .25);
+  const weightTotal = impactWeight + urgencyWeight + trustWeight || 1;
   const urgencyScore = Math.round(
-    (customer_impact * 0.40 + operational_urgency * 0.35 + trust_risk * 0.25) * 2
+    ((customer_impact * impactWeight + operational_urgency * urgencyWeight + trust_risk * trustWeight) / weightTotal) * 2
   ); // 0-20
 
   const viralityBonus = Math.round(virality_potential * 1.5); // 0-15
@@ -250,7 +259,7 @@ export function scorePost(post, category, dimensions, reasoning, responseTemplat
   const escalationScore = Math.min(100, Math.round(
     engagementScore + recencyScore + severity + urgencyScore + viralityBonus
   ));
-  const threshold = parseInt(process.env.ESCALATE_THRESHOLD) || 60;
+  const threshold = Math.max(0, Math.min(100, Number(rules.escalation_threshold ?? parseInt(process.env.ESCALATE_THRESHOLD) ?? 60)));
 
   return {
     ...post,

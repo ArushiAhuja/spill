@@ -32,6 +32,8 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
     intel.customerPainPoints?.length ? `Customer pain points: ${intel.customerPainPoints.slice(0, 5).join(', ')}` : '',
     intel.highRiskTopics?.length ? `High-risk topics: ${intel.highRiskTopics.slice(0, 4).join(', ')}` : '',
     intel.industryVocabulary?.length ? `Industry terminology: ${intel.industryVocabulary.slice(0, 6).join(', ')}` : '',
+    intel.priority_issues?.length ? `Human-approved priority issues: ${intel.priority_issues.slice(0, 8).join(', ')}` : '',
+    intel.risk_categories?.length ? `Human-approved risk categories: ${intel.risk_categories.slice(0, 8).join(', ')}` : '',
     contextQueries.length ? `Industry context terms: ${contextQueries.slice(0, 4).join(' / ')}` : '',
   ].filter(Boolean).join('\n');
 
@@ -216,7 +218,7 @@ export async function runOrgCycle(orgId) {
     logId = log.id;
 
     const { rows: [org] } = await query(
-      'SELECT name, description, industry_monitoring, industry_keywords, competitors, intel_profile, partner_brands, incident_threshold, plan, sla_first_response_minutes, alert_influencer_threshold, alert_viral_likes FROM organizations WHERE id = $1',
+      'SELECT name, description, industry_monitoring, industry_keywords, competitors, organization_profile, intel_profile, partner_brands, incident_threshold, plan, sla_first_response_minutes, alert_influencer_threshold, alert_viral_likes FROM organizations WHERE id = $1',
       [orgId]
     );
     const brand = brandKeyword(org?.name);
@@ -226,11 +228,14 @@ export async function runOrgCycle(orgId) {
     const partnerBrands = (org?.partner_brands || []).filter(Boolean)
     const incidentThreshold = org?.incident_threshold || 5
 
-    const intel = org?.intel_profile || {};
+    const intel = { ...(org?.organization_profile || {}), ...(org?.intel_profile || {}) };
     const feedbackContext = await getOrgFeedbackContext(orgId).catch(() => null);
-    const [relevanceAgentConfig, categoryAgentConfig] = await Promise.all([
+    const [sourceAgentConfig, relevanceAgentConfig, categoryAgentConfig, severityAgentConfig, trendAgentConfig] = await Promise.all([
+      getOrganizationAgentConfig(orgId, 'source_understanding'),
       getOrganizationAgentConfig(orgId, 'relevance'),
       getOrganizationAgentConfig(orgId, 'category'),
+      getOrganizationAgentConfig(orgId, 'severity'),
+      getOrganizationAgentConfig(orgId, 'trend'),
     ]);
     const intelBrandKws = (intel.brandKeywords || []).map(k => k.toLowerCase());
     const intelProductKws = (intel.productKeywords || []).map(k => k.toLowerCase());
@@ -410,7 +415,7 @@ export async function runOrgCycle(orgId) {
     let classifiedDirect;
     try {
       classifiedDirect = categories.length > 0 && newDirect.length > 0
-        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig)
+        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig, severityAgentConfig)
         : newDirect.map(noCategories);
     } catch (err) {
       console.warn('[scheduler] classifyPosts failed for tier1+tier2, storing keyword-matched posts with score 0:', err.message);
@@ -418,7 +423,7 @@ export async function runOrgCycle(orgId) {
     }
 
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
-      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig)
+      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig, severityAgentConfig)
       : newTier3.map(noCategories);
 
     // Drop posts the classifier flagged as not genuinely about this company.
@@ -454,7 +459,7 @@ export async function runOrgCycle(orgId) {
           model: post.relevance_tier === 'tier_3_ai_verified' ? relevanceAgentConfig.model : 'deterministic-policy',
           promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance_filter' : null,
           promptVersion: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null,
-          input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
+        input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', source_agent_config_version: sourceAgentConfig.version, source_agent_policy: buildAgentPolicyContext(sourceAgentConfig), agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
           output: { is_relevant: post.is_relevant !== false }, latencyMs: 0,
         }, {
           name: 'Category Detection Agent', kind: 'agent',
@@ -473,11 +478,11 @@ export async function runOrgCycle(orgId) {
           outputTokens: post._classification_trace?.outputTokens || null,
         }, {
           name: 'Severity Agent', kind: 'evaluator',
-          input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0 },
+          input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0, agent_config_version: severityAgentConfig.version, agent_policy: buildAgentPolicyContext(severityAgentConfig) },
           output: { escalation_score: post.escalation_score, escalation_dimensions: post.escalation_dimensions, reason: post.reasoning, escalated: post.escalated }, latencyMs: 0,
         }, {
           name: 'Executive Summary Agent', kind: 'agent', model: 'deterministic-summary-v1',
-          input: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions },
+          input: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, trend_agent_config_version: trendAgentConfig.version, trend_agent_policy: buildAgentPolicyContext(trendAgentConfig) },
           output: { executive_summary: post.executive_summary }, latencyMs: 0,
         }, {
           name: 'Signal quality gate', kind: 'evaluator',

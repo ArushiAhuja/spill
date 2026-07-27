@@ -13,8 +13,8 @@ export function signalQuality(post, novelty = 1) {
 
 export async function createEventTrace({ orgId, post, quality, decision, promptVersions = {}, observations = [] }) {
   const { rows: [trace] } = await query(
-    `INSERT INTO ai_traces (org_id, source, status, decision, quality, metadata)
-     VALUES ($1,$2,'completed',$3,$4,$5) RETURNING id`,
+    `INSERT INTO ai_traces (org_id, source, status, decision, quality, metadata, trace_key)
+     VALUES ($1,$2,'completed',$3,$4,$5,'spill_trace_' || replace(gen_random_uuid()::text,'-','')) RETURNING id,trace_key`,
     [orgId, post.source || null, decision, JSON.stringify(quality), JSON.stringify({ external_id: post.id, title: post.title || '', detected_query: post.detected_query || null, prompt_versions: promptVersions })]
   );
   const base = [{
@@ -23,18 +23,20 @@ export async function createEventTrace({ orgId, post, quality, decision, promptV
   }, ...observations];
   for (const observation of base) {
     await query(
-      `INSERT INTO ai_observations (trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      `INSERT INTO ai_observations (trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error,span_key,prompt_snapshot,config_snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'spill_span_' || replace(gen_random_uuid()::text,'-',''),$13,$14)`,
       [trace.id, observation.name, observation.kind || 'agent', observation.model || null, observation.promptKey || null,
        observation.promptVersion || null, JSON.stringify(observation.input || {}), JSON.stringify(observation.output || {}),
-       observation.latencyMs || null, observation.inputTokens || null, observation.outputTokens || null, observation.error || null]
+       observation.latencyMs || null, observation.inputTokens || null, observation.outputTokens || null, observation.error || null,
+       JSON.stringify(observation.promptSnapshot || (observation.promptKey ? { key: observation.promptKey, version: observation.promptVersion, content: observation.input?.prompt_system || observation.input?.policy || null } : {})),
+       JSON.stringify(observation.configSnapshot || (observation.input?.agent_policy ? { agent_policy: observation.input?.agent_policy, agent_config_version: observation.input?.agent_config_version ?? null } : {}))]
     );
   }
   return trace.id;
 }
 
 export async function linkTraceToPost(traceId, postId) {
-  if (traceId && postId) await query('UPDATE ai_traces SET post_id = $1 WHERE id = $2', [postId, traceId]);
+  if (traceId && postId) await query('UPDATE ai_traces SET post_id = $1, event_id = $1 WHERE id = $2', [postId, traceId]);
 }
 
 // Observations may happen after the initial decision (for example, an alert
@@ -42,11 +44,12 @@ export async function linkTraceToPost(traceId, postId) {
 export async function recordTraceObservation(traceId, observation) {
   if (!traceId) return;
   await query(
-    `INSERT INTO ai_observations (trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    `INSERT INTO ai_observations (trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error,span_key,prompt_snapshot,config_snapshot)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'spill_span_' || replace(gen_random_uuid()::text,'-',''),$13,$14)`,
     [traceId, observation.name, observation.kind || 'event', observation.model || null, observation.promptKey || null,
       observation.promptVersion || null, JSON.stringify(observation.input || {}), JSON.stringify(observation.output || {}),
-      observation.latencyMs || null, observation.inputTokens || null, observation.outputTokens || null, observation.error || null]
+     observation.latencyMs || null, observation.inputTokens || null, observation.outputTokens || null, observation.error || null,
+     JSON.stringify(observation.promptSnapshot || {}), JSON.stringify(observation.configSnapshot || {})]
   );
 }
 

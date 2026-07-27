@@ -98,6 +98,9 @@ export function buildOrganizationPromptContext(org = {}, categories = [], source
   lines.push(`Company: ${org.name || 'Unknown company'}`);
   if (org.website) lines.push(`Website supplied by customer: ${org.website}`);
   if (org.description) lines.push(`Company description supplied by customer: ${org.description}`);
+  if (org.organization_profile && Object.keys(org.organization_profile).length) {
+    lines.push(`Human-approved organisation profile: ${JSON.stringify(org.organization_profile)}`);
+  }
 
   const competitors = asList(org.competitors);
   if (competitors.length) lines.push(`Competitors supplied by customer: ${competitors.join(', ')}`);

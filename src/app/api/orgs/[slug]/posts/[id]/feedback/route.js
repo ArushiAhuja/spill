@@ -51,7 +51,7 @@ export async function POST(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const { rows: existing } = await query(
-      'SELECT id, title, escalation_score, category_id, escalated FROM posts WHERE id = $1 AND org_id = $2',
+      'SELECT id, title, body, source, ai_trace_id, escalation_score, category_id, escalated FROM posts WHERE id = $1 AND org_id = $2',
       [id, access.orgId]
     );
     if (!existing.length) return NextResponse.json({ error: 'post not found' }, { status: 404 });
@@ -192,16 +192,33 @@ export async function POST(request, { params }) {
       resultingAdjustment = adjustments[label] || 'feedback recorded';
     }
 
+    const agentName = ['wrong_category', 'missed_category'].includes(label) ? 'category'
+      : ['wrong_severity', 'missed_context'].includes(label) ? 'severity' : 'relevance';
     await query(
-      `INSERT INTO post_feedback (org_id, post_id, label, explanation, field, old_value, new_value, severity_direction, resulting_adjustment)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO post_feedback (org_id, post_id, label, explanation, field, old_value, new_value, severity_direction, resulting_adjustment, agent_name, trace_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         access.orgId, id, label || null, explanation || null,
         insertField, insertOldValue, insertNewValue,
         severity_direction || null,
         resultingAdjustment,
+        agentName, post.ai_trace_id || null, user.email || null,
       ]
     );
+
+    // Feedback is immediately reusable as labelled ground truth for the
+    // organisation's evaluation suite. It never changes a prompt by itself.
+    const expected = {
+      relevant: !NEGATIVE_LABELS.has(label),
+      category_id: (label === 'wrong_category' || label === 'missed_category') ? (new_value || null) : post.category_id || null,
+      severity_direction: label === 'wrong_severity' ? (severity_direction || null) : null,
+    };
+    const bucket = NEGATIVE_LABELS.has(label) ? 'bad_signal' : label === 'missed_context' || label === 'wrong_severity' ? 'borderline' : 'good_signal';
+    await query(
+      `INSERT INTO agent_evaluation_cases (org_id,post_id,agent_name,input,expected_output,bucket,notes,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [access.orgId, id, agentName, JSON.stringify({ title: post.title, body: post.body, source: post.source }), JSON.stringify(expected), bucket, explanation || null, user.email || null]
+    ).catch(() => {});
 
     return NextResponse.json({ ok: true, resulting_adjustment: resultingAdjustment });
   } catch (err) {

@@ -4,6 +4,7 @@ import { query } from '../../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../../../server/migrate.js';
 import { getPrompt } from '../../../../../../../server/prompts.js';
+import { createEventTrace } from '../../../../../../../server/observability.js';
 
 const PERSONALITIES = {
   professional: 'formal, empathetic, solution-focused corporate tone',
@@ -88,7 +89,8 @@ Generate ${Math.min(iterations, 5)} distinct response options. Return as a JSON 
       responses = [res.choices[0].message.content.trim()];
     }
 
-    return NextResponse.json({ responses, personality });
+    const traceId = await createEventTrace({ orgId: access.orgId, post: { id: ticket.id, source: ticket.source || 'ticket', title: ticket.title, body: ticket.body, detected_query: 'ticket response generation' }, quality: { relevance: 1, confidence: 1, score: 100 }, decision: 'response_generated', promptVersions: { response_writer: 0 }, observations: [{ name: 'Response Writer Agent', kind: 'agent', model: 'gpt-4o-mini', promptKey: 'response_writer', input: { system_prompt: systemPrompt, ticket_id: ticket.id, personality }, output: { response_count: responses.length }, latencyMs: null, inputTokens: res.usage?.prompt_tokens, outputTokens: res.usage?.completion_tokens, promptSnapshot: { key: 'response_writer', content: responseInstructions }, configSnapshot: { organization_context: { brand_voice: brandContext, customer_persona: icpContext, typical_complaints: typicalComplaints } } }] });
+    return NextResponse.json({ responses, personality, trace_id: traceId });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

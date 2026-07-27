@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 22;
+const MIGRATION_VERSION = 23;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -455,6 +455,83 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_config_versions_org ON organization_agent_config_versions(org_id, agent_name, version DESC)`);
+
+  // Canonical editable organisation profile. intel_profile remains Spill's learned
+  // interpretation; this field is the human-owned source of truth.
+  await query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS organization_profile JSONB NOT NULL DEFAULT '{}'`);
+
+  // Langfuse-style immutable trace/spans. UUID primary keys remain compatible;
+  // friendly IDs make support conversations and audit trails readable.
+  await query(`ALTER TABLE ai_traces ADD COLUMN IF NOT EXISTS trace_key TEXT`);
+  await query(`ALTER TABLE ai_traces ADD COLUMN IF NOT EXISTS event_id UUID`);
+  await query(`ALTER TABLE ai_observations ADD COLUMN IF NOT EXISTS span_key TEXT`);
+  await query(`ALTER TABLE ai_observations ADD COLUMN IF NOT EXISTS prompt_snapshot JSONB`);
+  await query(`ALTER TABLE ai_observations ADD COLUMN IF NOT EXISTS config_snapshot JSONB`);
+  await query(`UPDATE ai_traces SET trace_key = 'spill_trace_' || replace(id::text, '-', '') WHERE trace_key IS NULL`);
+  await query(`UPDATE ai_traces SET event_id = post_id WHERE event_id IS NULL AND post_id IS NOT NULL`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_traces_trace_key ON ai_traces(trace_key)`);
+  await query(`UPDATE ai_observations SET span_key = 'spill_span_' || replace(id::text, '-', '') WHERE span_key IS NULL`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_observations_span_key ON ai_observations(span_key)`);
+
+  // Evaluation cases are organisation-labelled ground truth. Runs are immutable
+  // comparisons of a prompt/config/model against those cases.
+  await query(`
+    CREATE TABLE IF NOT EXISTS agent_evaluation_cases (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      post_id UUID REFERENCES posts(id) ON DELETE SET NULL,
+      agent_name TEXT NOT NULL DEFAULT 'category',
+      input JSONB NOT NULL,
+      expected_output JSONB NOT NULL,
+      bucket TEXT NOT NULL DEFAULT 'good_signal',
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_eval_cases_org_agent ON agent_evaluation_cases(org_id, agent_name, created_at DESC)`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS agent_evaluation_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      prompt_key TEXT,
+      prompt_version INTEGER,
+      config_version INTEGER,
+      model TEXT,
+      case_count INTEGER NOT NULL DEFAULT 0,
+      metrics JSONB NOT NULL DEFAULT '{}',
+      results JSONB NOT NULL DEFAULT '[]',
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_eval_runs_org_agent ON agent_evaluation_runs(org_id, agent_name, created_at DESC)`);
+
+  // A/B experiments provide an explicit, auditable comparison contract rather
+  // than silently swapping prompts in production.
+  await query(`
+    CREATE TABLE IF NOT EXISTS prompt_experiments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      prompt_key TEXT NOT NULL,
+      baseline_content TEXT NOT NULL,
+      candidate_content TEXT NOT NULL,
+      baseline_model TEXT,
+      candidate_model TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )
+  `);
+
+  // Feedback is tied to the decisioning agent and trace so it can become a
+  // reviewed example/evaluation case instead of anonymous aggregate text.
+  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS agent_name TEXT`);
+  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS trace_id UUID REFERENCES ai_traces(id) ON DELETE SET NULL`);
+  await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS created_by TEXT`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`
