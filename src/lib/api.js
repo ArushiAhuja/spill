@@ -158,4 +158,11 @@ export const api = {
   mmtUpdateOutage: (slug, id, body) => request('PATCH', `/orgs/${slug}/mmt/outage-log/${id}`, body),
   mmtGetSupervisor: (slug, days) => request('GET', `/orgs/${slug}/mmt/supervisor${days ? `?days=${days}` : ''}`),
   mmtTranslate: (slug, body) => request('POST', `/orgs/${slug}/mmt/translate`, body),
+
+  // Hidden Spill operator console — server verifies super-admin access on every call.
+  getObservabilityOverview: () => request('GET', '/internal/observability/overview'),
+  getObservabilityTraces: (params = {}) => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))).toString()
+    return request('GET', `/internal/observability/traces${qs ? `?${qs}` : ''}`)
+  },
 }

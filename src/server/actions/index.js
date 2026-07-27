@@ -2,6 +2,7 @@ import { sendEmail } from './emailer.js';
 import { appendToSheet } from './sheets.js';
 import { sendSlack } from './slack.js';
 import { query } from '../db.js';
+import { recordTraceObservation } from '../observability.js';
 
 function isInMuteWindow(muteWindows) {
   if (!muteWindows?.length) return false
@@ -64,6 +65,8 @@ export async function fireEscalations(posts, { orgId, rules, categories }) {
       const normalised = { ...rule.config, emails: emailRecipients }
 
       let fired = false
+      let delivery = null
+      const actionStartedAt = Date.now()
       try {
         if (rule.action_type === 'email' && emailRecipients?.length) {
           const { messageId, recipients } = await sendEmail(post, category, normalised)
@@ -71,21 +74,33 @@ export async function fireEscalations(posts, { orgId, rules, categories }) {
             await createResponseThread(orgId, post.db_id, messageId, recipients[0]).catch(() => {})
           }
           fired = true
+          delivery = { destination: 'email', recipients, message_id: messageId || null }
         } else if (rule.action_type === 'slack' && (rule.config.webhook_url || rule.config.slack_webhook_url)) {
           await sendSlack(post, category, rule.config)
           fired = true
+          delivery = { destination: 'slack', channel: rule.config.channel_name || 'configured webhook' }
         } else if (rule.action_type === 'sheets' && rule.config.sheet_id) {
           await appendToSheet(post, category, rule.config)
           fired = true
+          delivery = { destination: 'google_sheets', sheet_id: rule.config.sheet_id }
         } else if (rule.action_type === 'webhook' && rule.config.url) {
           await fireWebhook(post, category, rule.config)
           fired = true
+          delivery = { destination: 'webhook', url: rule.config.url }
         }
       } catch (err) {
         console.error(`action error (rule ${rule.id}):`, err.message)
+        await recordTraceObservation(post.ai_trace_id, {
+          name: 'Alert delivery', kind: 'action', input: { rule_id: rule.id, action_type: rule.action_type },
+          output: { delivered: false }, latencyMs: Date.now() - actionStartedAt, error: err.message,
+        }).catch(() => {})
       }
 
       if (!fired) continue
+      await recordTraceObservation(post.ai_trace_id, {
+        name: 'Alert delivery', kind: 'action', input: { rule_id: rule.id, action_type: rule.action_type, threshold: rule.score_threshold },
+        output: { delivered: true, ...delivery }, latencyMs: Date.now() - actionStartedAt,
+      }).catch(() => {})
 
       // Upsert fire log
       try {

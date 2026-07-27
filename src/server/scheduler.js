@@ -8,7 +8,8 @@ import { checkAnomalies } from './detectors/anomaly.js';
 import { detectIncidents } from './detectors/incidents.js';
 import { ensureMigrations } from './migrate.js';
 import { getOrgFeedbackContext, updateOrgIntelligence } from './feedback.js';
-import { getPrompt } from './prompts.js';
+import { getPrompt, getPromptMetadata } from './prompts.js';
+import { assignCluster, createEventTrace, executiveSummary, linkTraceToPost, recordTraceObservation, signalQuality } from './observability.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -365,6 +366,11 @@ export async function runOrgCycle(orgId) {
 
     const newDirect = directPosts.filter(p => !seen.has(`${p.source}::${p.id}`));
     const newTier3 = tier3Filtered.filter(p => !seen.has(`${p.source}::${p.id}`));
+    newDirect.forEach(p => {
+      p.relevance_tier = tier1Ids.has(p.id) ? 'tier_1_direct_match' : 'tier_2_operational_match';
+      p.detected_query = p.relevance_tier === 'tier_1_direct_match' ? (brand || org.name) : 'operational intelligence keyword';
+    });
+    newTier3.forEach(p => { p.relevance_tier = 'tier_3_ai_verified'; p.detected_query = 'configured subreddit context query'; });
     const newPosts = [...newDirect, ...newTier3];
 
     if (!newPosts.length) {
@@ -414,7 +420,65 @@ export async function runOrgCycle(orgId) {
     if (irrelevant.length > 0) {
       console.log(`[org ${orgId}] filtered ${irrelevant.length} irrelevant posts after classification:`, irrelevant.map(p => p.title?.slice(0, 60)).join(' | '));
     }
-    const classified = allClassified.filter(p => p.is_relevant !== false);
+    const [classifierSystem, classifierScoring, relevancePrompt] = await Promise.all([
+      getPromptMetadata(orgId, 'classifier_system'),
+      getPromptMetadata(orgId, 'classifier_scoring'),
+      getPromptMetadata(orgId, 'relevance_filter'),
+    ]);
+    const qualityThreshold = Math.max(0, Math.min(100, Number(process.env.SIGNAL_QUALITY_THRESHOLD || 20)));
+    const classified = [];
+    for (const post of allClassified) {
+      const quality = signalQuality(post);
+      post.signal_quality = quality;
+      const decision = post.is_relevant === false ? 'rejected_irrelevant'
+        : quality.score < qualityThreshold ? 'suppressed_low_quality' : 'surfaced';
+      const categoryName = categories.find(c => c.id === post.category_id)?.name || 'Uncategorized';
+      post.executive_summary = executiveSummary(post, categoryName);
+      post.ai_trace_id = await createEventTrace({
+        orgId, post, quality, decision,
+        promptVersions: {
+          classifier_system: classifierSystem.version,
+          classifier_scoring: classifierScoring.version,
+          relevance_filter: relevancePrompt.version,
+        },
+        observations: [{
+          name: 'Relevance Agent', kind: 'agent',
+          model: post.relevance_tier === 'tier_3_ai_verified' ? 'gpt-4o-mini' : 'deterministic-policy',
+          promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance_filter' : null,
+          promptVersion: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null,
+          input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks' },
+          output: { is_relevant: post.is_relevant !== false }, latencyMs: 0,
+        }, {
+          name: 'Category Detection Agent', kind: 'agent',
+          model: post._classification_trace?.model || 'deterministic-keyword-fallback',
+          promptKey: 'classifier_system', promptVersion: classifierSystem.version,
+          input: {
+            prompt_system: classifierSystem.content,
+            prompt_scoring: classifierScoring.content,
+            relevance_policy: relevancePrompt.content,
+          },
+          output: { category: categoryName, category_id: post.category_id, confidence: post.classification_confidence, reasoning: post.reasoning },
+          latencyMs: post._classification_trace?.latencyMs || 0,
+          inputTokens: post._classification_trace?.inputTokens || null,
+          outputTokens: post._classification_trace?.outputTokens || null,
+        }, {
+          name: 'Severity Agent', kind: 'evaluator',
+          input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0 },
+          output: { escalation_score: post.escalation_score, escalation_dimensions: post.escalation_dimensions, reason: post.reasoning, escalated: post.escalated }, latencyMs: 0,
+        }, {
+          name: 'Executive Summary Agent', kind: 'agent', model: 'deterministic-summary-v1',
+          input: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions },
+          output: { executive_summary: post.executive_summary }, latencyMs: 0,
+        }, {
+          name: 'Signal quality gate', kind: 'evaluator',
+          input: { threshold: qualityThreshold, formula: 'relevance × impact × confidence × novelty' },
+          output: { ...quality, decision }, latencyMs: 0,
+        }],
+      });
+      if (decision === 'surfaced') classified.push(post);
+    }
+    const suppressed = allClassified.length - classified.length;
+    if (suppressed) console.log(`[org ${orgId}] quality gate suppressed ${suppressed} candidates below ${qualityThreshold}`);
 
     // Store in DB, tracking inserted IDs for incident detection
     const insertedIds = [];
@@ -433,7 +497,7 @@ export async function runOrgCycle(orgId) {
             post.is_competitor || false, post.competitor_name || null,
             post.is_influencer || false, post.response_template || null,
             post.location_tag || null, post.is_partner || false,
-            post.partner_name || null, post.follower_count || null,
+           post.partner_name || null, post.follower_count || null,
             post.escalation_dimensions ? JSON.stringify(post.escalation_dimensions) : null,
           ]
         );
@@ -441,6 +505,9 @@ export async function runOrgCycle(orgId) {
         if (inserted) {
           post.db_id = inserted.id;
           insertedIds.push(inserted.id);
+          await linkTraceToPost(post.ai_trace_id, inserted.id);
+          await query('UPDATE posts SET ai_trace_id=$1, signal_quality=$2 WHERE id=$3', [post.ai_trace_id, JSON.stringify(post.signal_quality), inserted.id]);
+          await assignCluster(orgId, inserted.id, post);
         } else {
           insertedIds.push(null);
         }
@@ -502,16 +569,28 @@ export async function runOrgCycle(orgId) {
             if (emailRows.length) {
               const followerDisplay = post.follower_count ? ` (${post.follower_count.toLocaleString()} followers)` : '';
               const scoreDisplay = (post.score || 0) > 0 ? ` · ${post.score} likes/upvotes` : '';
-              await sendEmail({
-                to: emailRows.map(r => r.email),
-                subject: `[${org.name}] ${isInfluencer ? '🔥 Influencer' : '📈 Viral'} post alert`,
-                html: `<p><strong>${isInfluencer ? 'High-follower influencer' : 'Rapidly trending post'} detected</strong>${followerDisplay}${scoreDisplay}</p>
+              try {
+                await sendEmail({
+                  to: emailRows.map(r => r.email),
+                  subject: `[${org.name}] ${isInfluencer ? '🔥 Influencer' : '📈 Viral'} post alert`,
+                  html: `<p><strong>${isInfluencer ? 'High-follower influencer' : 'Rapidly trending post'} detected</strong>${followerDisplay}${scoreDisplay}</p>
 <p><strong>Post:</strong> ${post.title || 'Untitled'}</p>
 ${post.body ? `<p>${post.body.slice(0, 300)}</p>` : ''}
 ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
 <p style="color:#888;font-size:12px">Auto-ticket created in Spill · ${reason}</p>`,
-                labels: ['instant-alert', reason.replace(' ', '-')],
-              }).catch(e => console.error('[alert email]', e.message));
+                  labels: ['instant-alert', reason.replace(' ', '-')],
+                });
+                await recordTraceObservation(post.ai_trace_id, {
+                  name: 'Command-center alert delivery', kind: 'action', input: { trigger: reason },
+                  output: { delivered: true, destination: 'email', recipients: emailRows.map(r => r.email) }, latencyMs: 0,
+                }).catch(() => {});
+              } catch (err) {
+                console.error('[alert email]', err.message);
+                await recordTraceObservation(post.ai_trace_id, {
+                  name: 'Command-center alert delivery', kind: 'action', input: { trigger: reason },
+                  output: { delivered: false, destination: 'email' }, latencyMs: 0, error: err.message,
+                }).catch(() => {});
+              }
             }
           }
         } catch (e) {

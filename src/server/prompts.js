@@ -108,6 +108,19 @@ export async function getPrompt(orgId, key) {
   }
 }
 
+// Used by the trace layer. Keep this separate from getPrompt so the hot path
+// retains its small string-only cache contract.
+export async function getPromptMetadata(orgId, key) {
+  const def = DEFAULT_PROMPTS[key];
+  if (!def) return { content: '', version: 0, isDefault: true };
+  try {
+    const { rows } = await query('SELECT content, version FROM prompts WHERE org_id=$1 AND prompt_key=$2', [orgId, key]);
+    return rows[0] ? { content: rows[0].content, version: rows[0].version, isDefault: false } : { content: def.content, version: 0, isDefault: true };
+  } catch {
+    return { content: def.content, version: 0, isDefault: true };
+  }
+}
+
 // Fetch all prompts for an org — merges DB overrides with defaults.
 // Returns array of { prompt_key, name, description, content, version, updated_by, updated_at, is_default }
 export async function listPrompts(orgId) {

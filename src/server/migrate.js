@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 19;
+const MIGRATION_VERSION = 20;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -321,7 +321,7 @@ export async function ensureMigrations() {
   await query(`
     CREATE TABLE IF NOT EXISTS prompts (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       prompt_key TEXT NOT NULL,
       name TEXT NOT NULL,
       description TEXT,
@@ -336,7 +336,7 @@ export async function ensureMigrations() {
   await query(`
     CREATE TABLE IF NOT EXISTS prompt_versions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       prompt_key TEXT NOT NULL,
       version INTEGER NOT NULL,
       author_email TEXT,
@@ -347,6 +347,63 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_prompt_versions_org_key ON prompt_versions(org_id, prompt_key, version DESC)`);
+
+  // Organisation Intelligence / AI observability. A trace is deliberately independent
+  // from posts: rejected candidates are useful debugging evidence too.
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN DEFAULT false`);
+  await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS ai_trace_id UUID`);
+  await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS signal_quality JSONB`);
+  await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS cluster_id UUID`);
+  await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS duplicate_of UUID REFERENCES posts(id) ON DELETE SET NULL`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS ai_traces (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      post_id UUID REFERENCES posts(id) ON DELETE SET NULL,
+      source TEXT,
+      status TEXT NOT NULL DEFAULT 'completed',
+      decision TEXT,
+      quality JSONB,
+      metadata JSONB DEFAULT '{}',
+      started_at TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ DEFAULT NOW(),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS ai_observations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      trace_id UUID NOT NULL REFERENCES ai_traces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'agent',
+      model TEXT,
+      prompt_key TEXT,
+      prompt_version INTEGER,
+      input JSONB,
+      output JSONB,
+      latency_ms INTEGER,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      error TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_created ON ai_traces(org_id, created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ai_observations_trace ON ai_observations(trace_id, created_at)`);
+  await query(`
+    CREATE TABLE IF NOT EXISTS signal_clusters (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+      fingerprint TEXT NOT NULL,
+      title TEXT NOT NULL,
+      volume INTEGER NOT NULL DEFAULT 1,
+      first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(org_id, fingerprint)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_signal_clusters_org_seen ON signal_clusters(org_id, last_seen_at DESC)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

@@ -64,7 +64,7 @@ function keywordClassify(posts, categories) {
     const viralityPotential = Math.min(10, Math.round(Math.log1p(post.score || 0) * 2));
 
     const dimensions = { customer_impact: customerImpact, operational_urgency: operationalUrgency, trust_risk: trustRisk, virality_potential: viralityPotential };
-    return scorePost(post, bestCategory, dimensions, 'keyword-classified', null, null, true);
+    return scorePost(post, bestCategory, dimensions, 'keyword-classified', null, null, true, 0.55);
   });
 }
 
@@ -115,6 +115,7 @@ Rules:
 
   const scoringContent = scoringRules || defaultScoring;
 
+  const startedAt = Date.now();
   const response = await getOpenAI().chat.completions.create({
     model: 'gpt-4o-mini',
     max_tokens: 2500,
@@ -139,6 +140,7 @@ Return a JSON array with EXACTLY ${posts.length} objects. Include a "post_index"
   "reasoning": "one sentence",
   "response_template": "string or null",
   "location_tag": "city name or null",
+  "confidence": 0-100,
   "is_relevant": true_or_false
 }]
 
@@ -214,13 +216,15 @@ ${scoringContent}`,
       cls.response_template || null,
       cls.location_tag || null,
       cls.is_relevant !== false,
+      clamp((cls.confidence ?? 65) / 100, 0, 1),
+      { model: 'gpt-4o-mini', latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw },
     );
   });
 }
 
 function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 
-export function scorePost(post, category, dimensions, reasoning, responseTemplate = null, locationTag = null, isRelevant = true) {
+export function scorePost(post, category, dimensions, reasoning, responseTemplate = null, locationTag = null, isRelevant = true, classificationConfidence = 0.65, trace = null) {
   const { customer_impact = 0, operational_urgency = 0, trust_risk = 0, virality_potential = 0 } = dimensions;
   const severity = category?.severity || 0;
   const engagementScore = Math.min(20, Math.log1p(post.score || 0) * 4);
@@ -255,5 +259,7 @@ export function scorePost(post, category, dimensions, reasoning, responseTemplat
     escalation_score: escalationScore,
     escalated: escalationScore >= threshold,
     is_relevant: isRelevant,
+    classification_confidence: classificationConfidence,
+    _classification_trace: trace,
   };
 }
