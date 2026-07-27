@@ -166,5 +166,8 @@ export const api = {
     return request('GET', `/internal/observability/traces${qs ? `?${qs}` : ''}`)
   },
   getObservabilityOperators: () => request('GET', '/internal/observability/operators'),
-  setObservabilityOperator: (email, granted) => request('POST', '/internal/observability/operators', { email, granted }),
+  setObservabilityOperator: (email, granted, org_id = null) => request('POST', '/internal/observability/operators', { email, granted, org_id }),
+  getObservabilityOrg: (id) => request('GET', `/internal/observability/organizations/${id}`),
+  saveObservabilityPrompt: (id, body) => request('PUT', `/internal/observability/organizations/${id}`, body),
+  runObservabilityPlayground: (body) => request('POST', '/internal/observability/playground', body),
 }

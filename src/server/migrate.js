@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 20;
+const MIGRATION_VERSION = 21;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -404,6 +404,20 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_signal_clusters_org_seen ON signal_clusters(org_id, last_seen_at DESC)`);
+
+  // Internal-console access can be granted narrowly to a single organisation.
+  // A global super admin retains access to every organisation.
+  await query(`
+    CREATE TABLE IF NOT EXISTS observability_org_access (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(org_id, user_id)
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_observability_access_user ON observability_org_access(user_id, org_id)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

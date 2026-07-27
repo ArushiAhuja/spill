@@ -9,3 +9,14 @@ export async function isSuperAdmin(user) {
   const { rows } = await query('SELECT is_super_admin FROM users WHERE id=$1', [user.id]);
   return rows[0]?.is_super_admin === true;
 }
+
+export async function getObservabilityScope(user) {
+  if (!user?.id) return { all: false, orgIds: [] };
+  if (await isSuperAdmin(user)) return { all: true, orgIds: [] };
+  const { rows } = await query('SELECT org_id FROM observability_org_access WHERE user_id=$1', [user.id]);
+  return { all: false, orgIds: rows.map(r => r.org_id) };
+}
+
+export function scopeAllowsOrg(scope, orgId) {
+  return scope?.all === true || scope?.orgIds?.includes(orgId);
+}
