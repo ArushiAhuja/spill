@@ -11,6 +11,7 @@ import { getOrgFeedbackContext, updateOrgIntelligence } from './feedback.js';
 import { getPrompt, getPromptMetadata } from './prompts.js';
 import { getOrganizationAgentConfig, buildAgentPolicyContext } from './organization-agent-config.js';
 import { assignCluster, createEventTrace, executiveSummary, linkTraceToPost, recordTraceObservation, signalQuality } from './observability.js';
+import { composePrompt } from './prompt-composer.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -22,7 +23,7 @@ function getOpenAI() {
 // didn't match the brand keyword. GPT decides if the post is genuinely about
 // this company's industry/niche, using description + context_queries as context.
 // Uses strict criteria: when in doubt, exclude.
-async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries = [], intel = {}, feedbackContext = null, orgId = null, agentConfig = null) {
+async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries = [], intel = {}, feedbackContext = null, orgId = null, agentConfig = null, organization = null, categories = [], sourceConfigs = []) {
   if (!posts.length || !process.env.OPENAI_API_KEY) return [];
 
   const operationalContext = [
@@ -57,9 +58,16 @@ async function aiRelevanceFilter(posts, orgName, orgDescription, contextQueries 
     }).join('\n');
 
     try {
-      const relevanceCriteria = orgId
-        ? await getPrompt(orgId, 'relevance_filter')
-        : null;
+      const composition = await composePrompt({
+        agentName: 'relevance', orgId, organization: organization || { id: orgId, name: orgName, description: orgDescription, intel_profile: intel },
+        categories, sourceConfigs, agentConfig, feedbackContext, model,
+        runtimeContext: {
+          source_context_terms: contextQueries.slice(0, 8),
+          candidates: batch.map((post, index) => ({ index, source: post.source, title: post.title || null, body: (post.body || '').slice(0, 500), url: post.url || null })),
+          output_rules: 'Return ONLY a JSON array of relevant 0-based candidate indexes, or an empty array. Do not include prose.',
+        },
+      });
+      const relevanceCriteria = composition.systemPrompt;
 
       const criteriaBlock = relevanceCriteria || `DEFAULT RULE: If this company's name or a specific product name appears in the post title or body, INCLUDE it — unless a strict exclusion below applies with high confidence.
 
@@ -83,11 +91,13 @@ EXCLUDE only if one of these applies with high confidence:
         messages: [
           {
             role: 'system',
-            content: 'You are an operational intelligence filter. Return ONLY a JSON array of relevant 0-based indexes, or an empty array. No explanation. Example: [0,2,5] or []',
+            content: relevanceCriteria,
           },
           {
             role: 'user',
-            content: `Company: ${orgName}
+            content: `${composition.userPrompt}
+
+Company: ${orgName}
 Description: ${orgDescription || orgName}
 ${operationalContext}
 ${agentPolicy ? `\n${agentPolicy}\n` : ''}
@@ -259,6 +269,14 @@ export async function runOrgCycle(orgId) {
       [orgId]
     );
 
+    // Deterministic agents still resolve a versioned policy and emit a debug
+    // record, so the complete pipeline can be reproduced from one contract.
+    await composePrompt({
+      agentName: 'source_understanding', orgId, organization: org, categories, sourceConfigs, agentConfig: sourceAgentConfig,
+      runtimeContext: { operation: 'normalise source candidates and apply deterministic brand, exclusion, source and geography checks' },
+      model: sourceAgentConfig.model,
+    });
+
     const orgConfig = { orgId, sources: {} };
     for (const sc of sourceConfigs) {
       const cfg = sc.config || {};
@@ -362,7 +380,7 @@ export async function runOrgCycle(orgId) {
     // Tier 3 (subreddit-only posts with no keyword match) still go through the AI relevance gate.
     const directPosts = [...tier1, ...tier2];
     const tier3Filtered = tier3Candidates.length > 0
-      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext, orgId, relevanceAgentConfig)
+      ? await aiRelevanceFilter(tier3Candidates, org.name, org.description, contextQueries, intel, feedbackContext, orgId, relevanceAgentConfig, org, categories, sourceConfigs)
       : [];
 
     console.log(`[org ${orgId}] relevance: direct=${directPosts.length} (t1=${tier1.length} t2=${tier2.length}) tier3_candidates=${tier3Candidates.length} tier3_passed=${tier3Filtered.length}`);
@@ -415,7 +433,7 @@ export async function runOrgCycle(orgId) {
     let classifiedDirect;
     try {
       classifiedDirect = categories.length > 0 && newDirect.length > 0
-        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig, severityAgentConfig)
+        ? await classifyPosts(newDirect, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig, severityAgentConfig, org, sourceConfigs)
         : newDirect.map(noCategories);
     } catch (err) {
       console.warn('[scheduler] classifyPosts failed for tier1+tier2, storing keyword-matched posts with score 0:', err.message);
@@ -423,7 +441,7 @@ export async function runOrgCycle(orgId) {
     }
 
     const classifiedTier3 = categories.length > 0 && newTier3.length > 0
-      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig, severityAgentConfig)
+      ? await classifyPosts(newTier3, categories, feedbackContext, org.name, org.description, intel, orgId, categoryAgentConfig, severityAgentConfig, org, sourceConfigs)
       : newTier3.map(noCategories);
 
     // Drop posts the classifier flagged as not genuinely about this company.
@@ -447,6 +465,10 @@ export async function runOrgCycle(orgId) {
         : quality.score < qualityThreshold ? 'suppressed_low_quality' : 'surfaced';
       const categoryName = categories.find(c => c.id === post.category_id)?.name || 'Uncategorized';
       post.executive_summary = executiveSummary(post, categoryName);
+      const [summaryComposition, trendComposition] = await Promise.all([
+        composePrompt({ agentName: 'summary', orgId, organization: org, categories, sourceConfigs, agentConfig: trendAgentConfig, model: 'deterministic-summary-v1', runtimeContext: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, signal: { title: post.title, body: post.body } } }),
+        composePrompt({ agentName: 'trend', orgId, organization: org, categories, sourceConfigs, agentConfig: trendAgentConfig, model: 'deterministic-cluster-v1', runtimeContext: { category: categoryName, title: post.title, body: post.body, source: post.source } }),
+      ]);
       post.ai_trace_id = await createEventTrace({
         orgId, post, quality, decision,
         promptVersions: {
@@ -464,10 +486,12 @@ export async function runOrgCycle(orgId) {
         }, {
           name: 'Category Detection Agent', kind: 'agent',
           model: post._classification_trace?.model || 'deterministic-keyword-fallback',
-          promptKey: 'classifier_system', promptVersion: classifierSystem.version,
+          promptKey: 'classifier_system', promptVersion: post._classification_trace?.prompt?.version ?? classifierSystem.version,
           input: {
-            prompt_system: classifierSystem.content,
+            prompt_system: post._classification_trace?.promptSnapshot || classifierSystem.content,
             prompt_scoring: classifierScoring.content,
+            prompt_hash: post._classification_trace?.promptHash || null,
+            prompt_id: post._classification_trace?.prompt?.id || null,
             relevance_policy: relevancePrompt.content,
             agent_config_version: categoryAgentConfig.version,
             agent_policy: buildAgentPolicyContext(categoryAgentConfig),
@@ -478,11 +502,13 @@ export async function runOrgCycle(orgId) {
           outputTokens: post._classification_trace?.outputTokens || null,
         }, {
           name: 'Severity Agent', kind: 'evaluator',
-          input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0, agent_config_version: severityAgentConfig.version, agent_policy: buildAgentPolicyContext(severityAgentConfig) },
+          promptKey: 'classifier_scoring', promptVersion: post._classification_trace?.severityPrompt?.version ?? classifierScoring.version,
+          input: { escalation_formula: 'engagement + recency + category severity + urgency + virality', category_severity: categories.find(c => c.id === post.category_id)?.severity || 0, agent_config_version: severityAgentConfig.version, agent_policy: buildAgentPolicyContext(severityAgentConfig), prompt_id: post._classification_trace?.severityPrompt?.id || null },
           output: { escalation_score: post.escalation_score, escalation_dimensions: post.escalation_dimensions, reason: post.reasoning, escalated: post.escalated }, latencyMs: 0,
         }, {
           name: 'Executive Summary Agent', kind: 'agent', model: 'deterministic-summary-v1',
-          input: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, trend_agent_config_version: trendAgentConfig.version, trend_agent_policy: buildAgentPolicyContext(trendAgentConfig) },
+          promptKey: 'summary', promptVersion: summaryComposition.prompt.version,
+          input: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, prompt_id: summaryComposition.prompt.id, prompt_hash: summaryComposition.promptHash, trend_prompt_id: trendComposition.prompt.id, trend_prompt_version: trendComposition.prompt.version, trend_agent_config_version: trendAgentConfig.version, trend_agent_policy: buildAgentPolicyContext(trendAgentConfig) },
           output: { executive_summary: post.executive_summary }, latencyMs: 0,
         }, {
           name: 'Signal quality gate', kind: 'evaluator',

@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { getPrompt } from './prompts.js';
+import { composePrompt } from './prompt-composer.js';
 import { buildAgentPolicyContext } from './organization-agent-config.js';
 
 let _openai = null;
@@ -12,7 +12,7 @@ function getOpenAI() {
 // posts: [{ id, source, title, body, score, created_at, ... }]
 // feedbackContext: string from getOrgFeedbackContext()
 // intelProfile: full intel_profile JSONB from organizations table
-export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null, severityConfig = null) {
+export async function classifyPosts(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null, severityConfig = null, organization = null, sourceConfigs = []) {
   const results = [];
   const batchSize = 5;
 
@@ -20,7 +20,7 @@ export async function classifyPosts(posts, categories, feedbackContext = null, o
     const batch = posts.slice(i, i + batchSize);
     try {
       if (process.env.OPENAI_API_KEY) {
-        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile, orgId, agentConfig, severityConfig);
+        const classified = await classifyBatch(batch, categories, feedbackContext, orgName, orgDescription, intelProfile, orgId, agentConfig, severityConfig, organization, sourceConfigs);
         results.push(...classified);
       } else {
         results.push(...keywordClassify(batch, categories));
@@ -69,7 +69,7 @@ function keywordClassify(posts, categories) {
   });
 }
 
-async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null, severityConfig = null) {
+async function classifyBatch(posts, categories, feedbackContext = null, orgName = null, orgDescription = null, intelProfile = null, orgId = null, agentConfig = null, severityConfig = null, organization = null, sourceConfigs = []) {
   const categoryList = categories.map(c =>
     `- ID: ${c.id} | Name: ${c.name} | Severity: ${c.severity || 0}/30 | Description: ${c.description || 'n/a'}`
   ).join('\n');
@@ -101,12 +101,22 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
 
   const orgContext = orgName ? `Company being monitored: ${orgName}\n${contextParts.join('\n')}\n\n` : '';
 
-  const [systemPrompt, scoringRules] = await Promise.all([
-    orgId ? getPrompt(orgId, 'classifier_system') : null,
-    orgId ? getPrompt(orgId, 'classifier_scoring') : null,
-  ]);
-
-  const systemContent = systemPrompt || `You are a brand intelligence classifier for a company monitoring system. Classify each post in the exact order given. Return ONLY a valid JSON array with one object per post, in the same order. No explanation, no markdown, no extra text. When in doubt about is_relevant, default to false — do not assume relevance if the connection to the monitored company is unclear.`;
+  const model = ['gpt-4o-mini', 'gpt-4o'].includes(agentConfig?.model) ? agentConfig.model : 'gpt-4o-mini';
+  const org = organization || { id: orgId, name: orgName, description: orgDescription, intel_profile: intelProfile || {} };
+  const severityComposition = await composePrompt({
+    agentName: 'severity', orgId, organization: org, categories, sourceConfigs, agentConfig: severityConfig, model,
+    runtimeContext: { purpose: 'Score customer impact, operational urgency, trust risk, and virality from category-classification evidence.' },
+  });
+  const categoryComposition = await composePrompt({
+    agentName: 'category', orgId, organization: org, categories, sourceConfigs, agentConfig, feedbackContext, model,
+    runtimeContext: {
+      categories: categories.map(({ id, name, description, severity }) => ({ id, name, description, severity })),
+      posts: posts.map((post, index) => ({ post_index: index + 1, title: post.title || null, body: (post.body || '').slice(0, 500), source: post.source, engagement: post.score || 0 })),
+      severity_prompt_id: severityComposition.prompt.id,
+      output_rules: `Return only a JSON array with exactly ${posts.length} objects, using post_index (1-based). When relevance is unclear, set is_relevant false.`,
+    },
+  });
+  const systemContent = categoryComposition.systemPrompt;
 
   const defaultScoring = `Scoring guidance:
 - customer_impact: 0=no direct customer harm, 5=significant frustration/financial loss, 8=hospitalisation or mass harm, 10=death/class-action/mass financial injury
@@ -120,10 +130,9 @@ Rules:
 - response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
 - location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`;
 
-  const scoringContent = scoringRules || defaultScoring;
+  const scoringContent = severityComposition.systemPrompt;
 
   const startedAt = Date.now();
-  const model = ['gpt-4o-mini', 'gpt-4o'].includes(agentConfig?.model) ? agentConfig.model : 'gpt-4o-mini';
   const response = await getOpenAI().chat.completions.create({
     model,
     max_tokens: 2500,
@@ -134,7 +143,7 @@ Rules:
       },
       {
         role: 'user',
-        content: `${orgContext}Categories available:\n${categoryList}\n${feedbackSection}
+        content: `${categoryComposition.userPrompt}\n\nSEVERITY POLICY\n${severityComposition.systemPrompt}\n\nCategories available:\n${categoryList}\n${feedbackSection}
 Posts to classify:\n${postsText}
 
 Return a JSON array with EXACTLY ${posts.length} objects. Include a "post_index" field (1-based) so results can be matched back to posts even if order shifts:
@@ -225,7 +234,7 @@ ${scoringContent}`,
       cls.location_tag || null,
       cls.is_relevant !== false,
       clamp((cls.confidence ?? 65) / 100, 0, 1),
-      { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw }, severityConfig,
+      { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw, prompt: categoryComposition.prompt, promptHash: categoryComposition.promptHash, promptSnapshot: categoryComposition.systemPrompt, severityPrompt: severityComposition.prompt }, severityConfig,
     );
   });
 }

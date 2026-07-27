@@ -3,7 +3,8 @@ import OpenAI from 'openai';
 import { query } from '../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../server/migrate.js';
-import { getPrompt } from '../../../../../server/prompts.js';
+import { composePrompt } from '../../../../../server/prompt-composer.js';
+import { getOrganizationAgentConfig } from '../../../../../server/organization-agent-config.js';
 
 export const maxDuration = 60;
 
@@ -139,7 +140,7 @@ export async function POST(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const { rows: orgRows } = await query(
-      'SELECT id, name, description, competitors, website FROM organizations WHERE id = $1',
+      'SELECT id, name, description, competitors, partner_brands, website, organization_profile, intel_profile FROM organizations WHERE id = $1',
       [access.orgId]
     );
     if (!orgRows.length) return NextResponse.json({ error: 'org not found' }, { status: 404 });
@@ -157,7 +158,11 @@ export async function POST(request, { params }) {
       console.log(`[onboarding] fetched ${websiteText.length} chars from ${org.website}`);
     }
 
-    const intelRules = await getPrompt(access.orgId, 'intel_extraction');
+    const intelligenceAgentConfig = await getOrganizationAgentConfig(access.orgId, 'intelligence_extraction');
+    const composition = await composePrompt({
+      agentName: 'intelligence_extraction', orgId: access.orgId, organization: org, agentConfig: intelligenceAgentConfig, model: 'gpt-4o-mini',
+      runtimeContext: { operation: 'Generate initial monitoring categories, source queries, and structured organisation intelligence from supplied onboarding evidence.' },
+    });
 
     // Try AI generation
     if (process.env.OPENAI_API_KEY && (org.description || websiteText)) {
@@ -223,8 +228,6 @@ Rules for sources.linkedin:
 - queries: 2-4 brand search terms for LinkedIn post search
 - company_handles: 1-2 LinkedIn company page slugs (the part after linkedin.com/company/) — use the actual slug from the company's LinkedIn URL
 
-${intelRules}
-
 Be specific to this company's actual industry. Think like an ops lead at this company — what internet conversations would they want to know about?`;
 
       try {
@@ -233,7 +236,7 @@ Be specific to this company's actual industry. Think like an ops lead at this co
           max_tokens: 3000,
           temperature: 0.3,
           messages: [
-            { role: 'system', content: 'You are a monitoring expert. Return ONLY valid JSON with no markdown, no explanation.' },
+            { role: 'system', content: `${composition.systemPrompt}\n\nReturn ONLY valid JSON with no markdown or explanation.` },
             { role: 'user', content: userMessage },
           ],
         });

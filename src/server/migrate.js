@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 23;
+const MIGRATION_VERSION = 24;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -532,6 +532,67 @@ export async function ensureMigrations() {
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS agent_name TEXT`);
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS trace_id UUID REFERENCES ai_traces(id) ON DELETE SET NULL`);
   await query(`ALTER TABLE post_feedback ADD COLUMN IF NOT EXISTS created_by TEXT`);
+
+  // Prompt orchestration V3. Registry rows are immutable prompt versions with a
+  // single active version per agent/scope. The application lazily seeds global
+  // defaults so code-owned defaults become durable registry records as well.
+  await query(`
+    CREATE TABLE IF NOT EXISTS prompt_registry (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      prompt_id TEXT NOT NULL UNIQUE,
+      agent_name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('global','organization')),
+      organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','deprecated')),
+      prompt_template TEXT NOT NULL,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK ((scope = 'global' AND organization_id IS NULL) OR (scope = 'organization' AND organization_id IS NOT NULL)),
+      UNIQUE(agent_name, scope, organization_id, version)
+    )
+  `);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_registry_one_active_global ON prompt_registry(agent_name) WHERE scope='global' AND status='active'`);
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_registry_one_active_org ON prompt_registry(agent_name,organization_id) WHERE scope='organization' AND status='active'`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_prompt_registry_resolve ON prompt_registry(agent_name,organization_id,status,version DESC)`);
+
+  // Preserve all existing organisation customisations when moving from the
+  // legacy key/value table. A custom classifier role maps to category and its
+  // scoring rules map to severity; no current organisation loses its prompt.
+  await query(`
+    INSERT INTO prompt_registry (prompt_id,agent_name,scope,organization_id,version,status,prompt_template,created_by,created_at,updated_at)
+    SELECT
+      'legacy_' || replace(p.id::text,'-',''),
+      CASE p.prompt_key
+        WHEN 'relevance_filter' THEN 'relevance'
+        WHEN 'classifier_system' THEN 'category'
+        WHEN 'classifier_scoring' THEN 'severity'
+        WHEN 'response_writer' THEN 'response_writer'
+        WHEN 'intel_extraction' THEN 'intelligence_extraction'
+      END,
+      'organization', p.org_id, GREATEST(p.version, 1), 'active', p.content, p.updated_by, p.created_at, p.updated_at
+    FROM prompts p
+    WHERE p.prompt_key IN ('relevance_filter','classifier_system','classifier_scoring','response_writer','intel_extraction')
+    ON CONFLICT (prompt_id) DO NOTHING
+  `);
+
+  // Every composed agent execution has a compact reproducibility record. Full
+  // prompts remain in the trace snapshot; this table is safe to index by hash.
+  await query(`
+    CREATE TABLE IF NOT EXISTS prompt_execution_debug (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      agent_name TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      prompt_version INTEGER NOT NULL,
+      prompt_hash TEXT NOT NULL,
+      model TEXT,
+      executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      metadata JSONB NOT NULL DEFAULT '{}'
+    )
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS idx_prompt_execution_debug_org_time ON prompt_execution_debug(org_id, executed_at DESC)`);
 
   // Persist completed version to DB so future cold starts skip all 55 queries
   await query(`

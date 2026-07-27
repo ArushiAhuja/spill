@@ -4,8 +4,9 @@ import { getUser } from '../../../../../server/api-auth.js';
 import { getObservabilityScope, scopeAllowsOrg } from '../../../../../server/super-admin.js';
 import { ensureMigrations } from '../../../../../server/migrate.js';
 import { query } from '../../../../../server/db.js';
-import { buildEffectivePromptPreview, getPromptMetadata, safeMonitoringConfig } from '../../../../../server/prompts.js';
+import { safeMonitoringConfig } from '../../../../../server/prompts.js';
 import { agentForPrompt, getOrganizationAgentConfigs } from '../../../../../server/organization-agent-config.js';
+import { composePrompt } from '../../../../../server/prompt-composer.js';
 
 const MODELS = new Set(['gpt-4o-mini', 'gpt-4o']);
 const BUCKETS = new Set(['good_signal', 'bad_signal', 'borderline']);
@@ -71,28 +72,34 @@ export async function POST(request) {
     if (body.action !== 'run') return NextResponse.json({ error: 'unsupported action' }, { status: 400 });
 
     const promptKey = body.prompt_key || 'classifier_system';
+    const agentName = body.agent_name || agentForPrompt(promptKey)?.agent_name || 'category';
     const model = MODELS.has(body.model) ? body.model : 'gpt-4o-mini';
-    const { rows: cases } = await query(`SELECT * FROM agent_evaluation_cases WHERE org_id=$1 AND agent_name=$2 ORDER BY created_at DESC LIMIT 50`, [orgId, body.agent_name || 'category']);
+    const { rows: cases } = await query(`SELECT * FROM agent_evaluation_cases WHERE org_id=$1 AND agent_name=$2 ORDER BY created_at DESC LIMIT 50`, [orgId, agentName]);
     if (!cases.length) return NextResponse.json({ error: 'no evaluation cases for this organisation and agent' }, { status: 400 });
-    const [{ rows: orgRows }, { rows: categories }, { rows: sources }, prompt, configs] = await Promise.all([
+    const [{ rows: orgRows }, { rows: categories }, { rows: sources }, configs] = await Promise.all([
       query('SELECT id,name,description,website,competitors,industry_keywords,partner_brands,organization_profile,intel_profile FROM organizations WHERE id=$1', [orgId]),
       query('SELECT id,name,description,severity FROM categories WHERE org_id=$1', [orgId]),
       query('SELECT source,enabled,config FROM source_configs WHERE org_id=$1', [orgId]),
-      getPromptMetadata(orgId, promptKey), getOrganizationAgentConfigs(orgId),
+      getOrganizationAgentConfigs(orgId),
     ]);
     const org = orgRows[0]; if (!org) return NextResponse.json({ error: 'organisation not found' }, { status: 404 });
-    const config = configs.find(item => item.agent_name === agentForPrompt(promptKey)?.agent_name);
+    const config = configs.find(item => item.agent_name === agentName);
     const safeSources = sources.map(source => ({ source: source.source, enabled: source.enabled, config: safeMonitoringConfig(source.config) }));
-    const content = body.prompt_override?.trim() || prompt.content;
-    const system = buildEffectivePromptPreview(promptKey, content, org, categories, safeSources, config);
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const results = [];
+    let resolvedPrompt = null;
     for (const evaluationCase of cases) {
       const input = evaluationCase.input || {};
       const complaint = [input.title, input.body, input.text].filter(Boolean).join('\n') || JSON.stringify(input);
+      const composition = await composePrompt({
+        agentName, orgId, organization: org, categories, sourceConfigs: safeSources, agentConfig: config,
+        promptOverride: body.prompt_override?.trim() || null, model,
+        runtimeContext: { historical_case_id: evaluationCase.id, customer_signal: complaint, categories, output_rules: 'Return JSON only with relevant, category, confidence, customer_impact, operational_urgency, trust_risk, and reasoning.' },
+      });
+      resolvedPrompt ||= composition.prompt;
       const response = await client.chat.completions.create({ model, temperature: 0, max_tokens: 500, messages: [
-        { role: 'system', content: `${system}\nReturn JSON only: {"relevant":boolean,"category":"string|null","confidence":0-100,"customer_impact":0-10,"operational_urgency":0-10,"trust_risk":0-10,"reasoning":"string"}` },
-        { role: 'user', content: `Organisation categories: ${JSON.stringify(categories)}\nCustomer signal: ${complaint}` },
+        { role: 'system', content: composition.systemPrompt },
+        { role: 'user', content: composition.userPrompt },
       ] });
       const raw = response.choices[0].message.content?.trim() || '';
       let actual; try { actual = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw); } catch { actual = { raw, parse_error: true, relevant: false, confidence: 0 }; }
@@ -101,7 +108,7 @@ export async function POST(request) {
     const metrics = metricsFor(results);
     const { rows: [run] } = await query(
       `INSERT INTO agent_evaluation_runs (org_id,agent_name,prompt_key,prompt_version,config_version,model,case_count,metrics,results,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [orgId, body.agent_name || 'category', promptKey, prompt.version, config?.version || 0, model, cases.length, JSON.stringify(metrics), JSON.stringify(results), auth.user.email || null]
+      [orgId, agentName, promptKey, resolvedPrompt?.version || 0, config?.version || 0, model, cases.length, JSON.stringify(metrics), JSON.stringify(results), auth.user.email || null]
     );
     return NextResponse.json({ run });
   } catch (err) { return NextResponse.json({ error: err.message }, { status: 500 }); }
