@@ -3,6 +3,7 @@ import { query } from '../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../server/api-auth.js';
 import { applyFeedbackLearning, updateOrgIntelligence } from '../../../../../../server/feedback.js';
 import { ensureMigrations } from '../../../../../../server/migrate.js';
+import { invalidateOrganizationAgentBriefing } from '../../../../../../server/organization-intelligence.js';
 
 // PATCH /api/orgs/[slug]/feedback/[id] — edit label and/or explanation
 export async function PATCH(request, { params }) {
@@ -85,6 +86,7 @@ export async function DELETE(request, { params }) {
       [id, access.orgId]
     );
     if (!rows.length) return NextResponse.json({ error: 'not found' }, { status: 404 });
+    invalidateOrganizationAgentBriefing(access.orgId);
 
     // Force rebuild — signal was removed, re-derive terms immediately
     updateOrgIntelligence(access.orgId, { force: true }).catch(() => {});

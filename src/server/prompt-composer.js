@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { getActivePrompt } from './prompt-registry.js';
-import { buildOrganizationIntelligence, loadOrganizationIntelligence } from './organization-intelligence.js';
+import { buildOrganizationIntelligence, getOrganizationAgentBriefing, loadOrganizationIntelligence } from './organization-intelligence.js';
 
 const BASE_IDENTITIES = {
   source_understanding: 'You are Spill\'s Source Understanding Agent. Preserve source truth and make only deterministic, explainable normalisation decisions.',
@@ -36,13 +36,16 @@ export async function composePrompt({ agentName, orgId, organization = null, cat
     version: 0, status: 'draft', prompt_template: promptOverride,
   } : await getActivePrompt({ orgId, agentName });
   const intelligence = buildOrganizationIntelligence({ ...loaded, agentConfig });
+  const organisationBriefing = await getOrganizationAgentBriefing({
+    orgId, agentName, org: loaded.org, categories: loaded.categories, agentConfig,
+  });
   const examples = formatExamples(agentConfig?.examples);
   const feedback = formatFeedback(feedbackContext);
   const runtime = bounded(runtimeContext, 14000);
   const sections = [
     ['BASE IDENTITY', BASE_IDENTITIES[agentName] || 'You are a Spill operational intelligence agent.'],
     ['TASK INSTRUCTIONS', resolved.prompt_template],
-    ['ORGANISATION INTELLIGENCE LAYER', intelligence || 'No organisation intelligence is available. Use only runtime context.'],
+    ['ORGANISATION INTELLIGENCE LAYER', organisationBriefing || intelligence || 'No organisation intelligence is available. Use only runtime context.'],
     examples ? ['REVIEWED ORGANISATION EXAMPLES', examples] : null,
     feedback ? ['REVIEWED FEEDBACK', feedback] : null,
   ].filter(Boolean);
@@ -54,7 +57,8 @@ export async function composePrompt({ agentName, orgId, organization = null, cat
     agentName, orgId, systemPrompt, userPrompt, finalPrompt, promptHash,
     prompt: { id: resolved.prompt_id, version: Number(resolved.version), scope: resolved.scope, status: resolved.status },
     model: model || agentConfig?.model || null,
-    organizationIntelligence: intelligence,
+    organizationIntelligence: organisationBriefing || intelligence,
+    rawOrganizationIntelligence: intelligence,
     timestamp: new Date().toISOString(),
   };
   if (logExecution) await recordPromptExecution(composed);

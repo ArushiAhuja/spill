@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { query } from './db.js';
 import { getOrganizationAgentConfig, saveOrganizationAgentConfig } from './organization-agent-config.js';
 import { syncFeedbackAssessment, syncImprovementRecommendation } from './event-intelligence.js';
+import { invalidateOrganizationAgentBriefing } from './organization-intelligence.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -150,6 +151,7 @@ async function applyThresholdLearning({ orgId, feedbackId, eventId, agentName, e
 export async function applyFeedbackLearning({ orgId, feedbackId, eventId, agentName, post, label, explanation, newValue = null, severityDirection = null, authorEmail = null }) {
   const result = { prompt_context: false, example_update: false, threshold_adjustment: false, assessment: [], recommendation: null };
   try {
+    invalidateOrganizationAgentBriefing(orgId);
     result.assessment = await syncFeedbackAssessment({
       orgId, eventId, traceId: post.ai_trace_id || null, postId: post.id || null,
       feedbackId, agentName, label, reason: explanation,

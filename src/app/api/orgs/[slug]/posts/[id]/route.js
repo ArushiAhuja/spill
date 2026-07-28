@@ -9,6 +9,7 @@ import { ensureMigrations } from '../../../../../../server/migrate.js';
 import { sendEmail } from '../../../../../../server/actions/emailer.js';
 import { sendSlack } from '../../../../../../server/actions/slack.js';
 import { applyFeedbackLearning } from '../../../../../../server/feedback.js';
+import { invalidateOrganizationAgentBriefing } from '../../../../../../server/organization-intelligence.js';
 
 function isInMuteWindow(muteWindows) {
   if (!muteWindows?.length) return false;
@@ -128,6 +129,9 @@ export async function PATCH(request, { params }) {
     );
 
     const updated = rows[0];
+    // Notes, saved/dismissed state, and resolution outcomes are compiled into
+    // the organisation briefing used by every agent on its next execution.
+    invalidateOrganizationAgentBriefing(access.orgId);
     const actorName = user.name || user.email;
 
     // Fire-and-forget activity logging for meaningful state changes
