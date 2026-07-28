@@ -13,6 +13,7 @@
     "test:observability": "node scripts/test-observability-trace.mjs",
     "test:feedback": "node scripts/test-feedback-learning.mjs",
     "test:briefings": "node scripts/test-organization-briefings.mjs",
+    "test:alert-guidance": "node scripts/test-alert-guidance.mjs",
     "test:classifier:save": "node scripts/test-classifier.mjs --save",
     "test:all": "node scripts/test-relevance.mjs && node scripts/test-classifier.mjs"
   },

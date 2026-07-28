@@ -3,7 +3,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
 import { timeAgo } from '@/lib/auth'
-import { buildSignals, buildDimensions } from '@/lib/explain'
+import { buildSignals } from '@/lib/explain'
+import { buildAlertGuidance } from '@/lib/alert-guidance'
 
 const SOURCES = ['reddit', 'hackernews', 'google_news', 'twitter', 'playstore', 'linkedin']
 
@@ -122,40 +123,39 @@ function WhyFlaggedRow({ post }) {
   )
 }
 
-function DimensionBars({ post }) {
-  const dims = buildDimensions(post)
-  if (!dims) return null
-
-  const barColor = (v) => {
-    if (v >= 7) return '#f87171'
-    if (v >= 4) return '#f59e0b'
-    return '#1e2535'
-  }
+function InvestigationGuide({ post }) {
+  const guidance = buildAlertGuidance(post)
+  const sectionTitle = { fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6, fontFamily: 'var(--font-mono)', fontWeight: 600 }
+  const itemStyle = { fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {dims.map(d => (
-        <div key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)', width: 140, flexShrink: 0 }}>{d.label}</span>
-          <div style={{ flex: 1, height: 3, background: '#1a1f2e', borderRadius: 99, overflow: 'hidden' }}>
-            <div style={{
-              height: '100%',
-              width: `${d.value * 10}%`,
-              background: barColor(d.value),
-              borderRadius: 99,
-              transition: 'width 0.3s ease',
-            }} />
-          </div>
-          <span style={{ fontSize: 10, color: d.value >= 7 ? '#f87171' : d.value >= 4 ? '#f59e0b' : '#334155', fontFamily: 'var(--font-mono)', width: 28, textAlign: 'right', flexShrink: 0 }}>{d.value}/10</span>
+    <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+      <div style={{ padding: '10px 12px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.18)', borderRadius: 7 }}>
+        <div style={sectionTitle}>1. CRM investigation guide</div>
+        <ul style={{ margin: 0, paddingLeft: 16, display: 'grid', gap: 3 }}>
+          {guidance.crmChecks.map(check => <li key={check} style={itemStyle}>{check}</li>)}
+        </ul>
+      </div>
+      <div style={{ padding: '10px 12px', background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.18)', borderRadius: 7 }}>
+        <div style={sectionTitle}>2. Impact prediction</div>
+        <div style={{ display: 'grid', gap: 4 }}>
+          {guidance.impacts.map(({ team, reason }) => (
+            <div key={team} style={itemStyle}><span style={{ color: '#c4b5fd', fontWeight: 600 }}>{team}</span> — {reason}</div>
+          ))}
         </div>
-      ))}
+      </div>
+      <div style={{ padding: '10px 12px', background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.18)', borderRadius: 7 }}>
+        <div style={sectionTitle}>3. Action playbook</div>
+        <ol style={{ margin: 0, paddingLeft: 16, display: 'grid', gap: 3 }}>
+          {guidance.actions.map(action => <li key={action} style={itemStyle}>{action}</li>)}
+        </ol>
+      </div>
     </div>
   )
 }
 
 function ExplainabilityPanel({ post }) {
   const signals = buildSignals(post)
-  const hasDims = !!post.escalation_dimensions
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -179,12 +179,7 @@ function ExplainabilityPanel({ post }) {
         {signals.map(s => <SignalChip key={s.id} signal={s} />)}
       </div>
 
-      {/* Dimension bars */}
-      {hasDims && (
-        <div style={{ marginBottom: 10, padding: '8px 10px', background: 'rgba(30,37,53,0.5)', borderRadius: 6, border: '1px solid #1e2535' }}>
-          <DimensionBars post={post} />
-        </div>
-      )}
+      <InvestigationGuide post={post} />
 
       {/* AI reasoning */}
       {post.reasoning && (
