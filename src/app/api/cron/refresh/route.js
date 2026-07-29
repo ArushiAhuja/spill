@@ -17,8 +17,8 @@ export async function GET(request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
   try {
-    await runAllOrgs();
-    return NextResponse.json({ ok: true });
+    const summary = await runAllOrgs();
+    return NextResponse.json({ ok: summary.failed === 0, summary }, { status: summary.failed ? 207 : 200, headers: { 'Cache-Control': 'no-store' } });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
@@ -33,11 +33,12 @@ export async function POST(request) {
     let orgId;
     try { ({ orgId } = await request.json()); } catch {}
     if (orgId) {
-      await runOrgCycle(orgId);
+      const result = await runOrgCycle(orgId);
+      return NextResponse.json({ ok: result.status === 'completed', result }, { status: result.status === 'completed' ? 200 : 500, headers: { 'Cache-Control': 'no-store' } });
     } else {
-      await runAllOrgs();
+      const summary = await runAllOrgs();
+      return NextResponse.json({ ok: summary.failed === 0, summary }, { status: summary.failed ? 207 : 200, headers: { 'Cache-Control': 'no-store' } });
     }
-    return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

@@ -101,7 +101,7 @@ function timedFetch(url, options = {}) {
 
 async function getBearerToken(credentials = {}) {
   // Prefer a pre-issued bearer token
-  const direct = credentials.bearer_token?.trim();
+  const direct = credentials.bearer_token?.trim() || process.env.TWITTER_BEARER_TOKEN?.trim();
   if (direct) return direct;
 
   // Derive from consumer key + secret (OAuth2 app-only flow)

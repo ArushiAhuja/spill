@@ -168,14 +168,29 @@ export async function refreshOrg(orgId) {
   return runOrgCycle(orgId);
 }
 
-export async function runAllOrgs() {
+export async function runAllOrgs({ concurrency = Number(process.env.REFRESH_CONCURRENCY || 3) } = {}) {
   await ensureMigrations();
   const { rows: orgs } = await query(`
     SELECT DISTINCT o.id FROM organizations o
     JOIN source_configs sc ON sc.org_id = o.id AND sc.enabled = true
     WHERE o.onboarded = true
   `);
-  await Promise.allSettled(orgs.map(o => runOrgCycle(o.id)));
+  const results = [];
+  let next = 0;
+  const workers = Math.max(1, Math.min(8, Number(concurrency) || 3, orgs.length));
+  async function worker() {
+    while (next < orgs.length) {
+      const org = orgs[next++];
+      results.push(await runOrgCycle(org.id));
+    }
+  }
+  await Promise.all(Array.from({ length: workers }, worker));
+  return {
+    total: results.length,
+    completed: results.filter(result => result?.status === 'completed').length,
+    failed: results.filter(result => result?.status === 'failed').length,
+    results,
+  };
 }
 
 const SKIP_PREFIXES = new Set([
@@ -256,7 +271,7 @@ export async function runOrgCycle(orgId) {
 
     if (!sourceConfigs.length) {
       await query('UPDATE refresh_logs SET status=$1, completed_at=NOW() WHERE id=$2', ['completed', logId]);
-      return;
+      return { orgId, status: 'completed', postsFetched: 0, postsEscalated: 0 };
     }
 
     const { rows: categories } = await query(
@@ -276,13 +291,26 @@ export async function runOrgCycle(orgId) {
     for (const sc of sourceConfigs) {
       const cfg = sc.config || {};
       // Inject brand as default query so sources work out-of-the-box without user configuration
-      const effectiveConfig = (!cfg.queries?.length && brand) ? { ...cfg, queries: [brand] } : cfg;
+      const effectiveConfig = {
+        ...cfg,
+        ...(!cfg.queries?.length && brand ? { queries: [brand] } : {}),
+        // Fetchers use these organisation-specific queries to discover relevant
+        // operational discussions beyond an exact brand-name match.
+        intel_profile: { ...intel, ...(cfg.intel_profile || {}) },
+      };
       orgConfig.sources[sc.source] = { enabled: true, config: effectiveConfig, credentials: sc.credentials };
     }
 
-    const rawPosts = await fetchAll(orgConfig);
+    const fetchResult = await fetchAll(orgConfig, { withDiagnostics: true });
+    const rawPosts = fetchResult.posts;
+    await Promise.all(fetchResult.diagnostics.map(source => query(
+      `UPDATE source_configs
+       SET last_fetch_at=NOW(), last_fetch_error=$1
+       WHERE org_id=$2 AND source=$3 AND enabled=true`,
+      [source.status === 'error' ? String(source.error || 'source fetch failed').slice(0, 500) : null, orgId, source.source]
+    ))).catch(error => console.warn(`[org ${orgId}] source health update failed:`, error.message));
     const bySource = rawPosts.reduce((acc, p) => { acc[p.source] = (acc[p.source] || 0) + 1; return acc; }, {});
-    console.log(`[org ${orgId}] fetched ${rawPosts.length} raw posts:`, JSON.stringify(bySource));
+    console.log(`[org ${orgId}] fetched ${rawPosts.length} raw posts:`, JSON.stringify(bySource), JSON.stringify(fetchResult.diagnostics));
 
     // Build set of explicitly configured subreddits + context_queries for AI filter context
     const redditCfg = orgConfig.sources?.reddit?.config || {};
@@ -404,11 +432,7 @@ export async function runOrgCycle(orgId) {
         'UPDATE refresh_logs SET status=$1, completed_at=NOW(), posts_fetched=0 WHERE id=$2',
         ['completed', logId]
       );
-      await query(
-        `UPDATE source_configs SET last_fetch_at = NOW(), last_fetch_error = NULL WHERE org_id = $1 AND enabled = true`,
-        [orgId]
-      ).catch(() => {});
-      return;
+      return { orgId, status: 'completed', postsFetched: 0, postsEscalated: 0 };
     }
 
     // Annotate competitor + influencer flags before classification
@@ -672,11 +696,6 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
       ['completed', newPosts.length, escalated.length, logId]
     );
 
-    await query(
-      `UPDATE source_configs SET last_fetch_at = NOW(), last_fetch_error = NULL WHERE org_id = $1 AND enabled = true`,
-      [orgId]
-    ).catch(() => {})
-
     // Run intelligence update once per cycle (debounced inside — skips if updated < 2h ago).
     // This replaces per-feedback-submission calls, eliminating redundant LLM calls when
     // users submit multiple pieces of feedback in the same session.
@@ -685,6 +704,7 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
     );
 
     console.log(`[org ${orgId}] cycle done: ${newPosts.length} new, ${escalated.length} escalated`);
+    return { orgId, status: 'completed', postsFetched: newPosts.length, postsEscalated: escalated.length };
   } catch (err) {
     console.error(`[org ${orgId}] cycle failed:`, err.message);
     if (logId) {
@@ -697,5 +717,6 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
       `UPDATE source_configs SET last_fetch_at = NOW(), last_fetch_error = $1 WHERE org_id = $2 AND enabled = true`,
       [err.message.slice(0, 200), orgId]
     ).catch(() => {})
+    return { orgId, status: 'failed', error: err.message };
   }
 }

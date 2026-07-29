@@ -148,7 +148,7 @@ export const FETCHER_BY_KEY = Object.fromEntries(
   FETCHER_MANIFEST.map(f => [f.key, f])
 );
 
-export async function fetchAll(orgConfig) {
+export async function fetchAll(orgConfig, { withDiagnostics = false } = {}) {
   const tasks = [];
   const { sources } = orgConfig;
 
@@ -156,27 +156,26 @@ export async function fetchAll(orgConfig) {
     const src = sources[entry.key];
     if (src?.enabled) {
       tasks.push(
-        entry.fetch(src).catch(err => {
-          console.error(`[fetchAll] ${entry.key} crashed: ${err.message}`);
-          return [];
-        })
+        entry.fetch(src)
+          .then(posts => ({ source: entry.key, status: 'ok', posts: Array.isArray(posts) ? posts : [] }))
+          .catch(err => {
+            console.error(`[fetchAll] ${entry.key} crashed: ${err.message}`);
+            return { source: entry.key, status: 'error', posts: [], error: err.message };
+          })
       );
     }
   }
 
-  const results = await Promise.allSettled(tasks);
+  const results = await Promise.all(tasks);
 
   const allPosts = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      allPosts.push(...result.value);
-    } else {
-      console.error('[fetchAll] fetcher error:', result.reason?.message);
-    }
-  }
+  for (const result of results) allPosts.push(...result.posts);
 
-  // Drop anything older than 24 hours
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  // Keep a small recovery window. The database de-duplicates by source and
+  // external ID, so this protects a workspace from a missed cron invocation
+  // without creating duplicate alerts.
+  const lookbackHours = Math.max(24, Math.min(168, Number(process.env.SOURCE_LOOKBACK_HOURS || 72)));
+  const cutoff = Date.now() - lookbackHours * 60 * 60 * 1000;
   const fresh = allPosts.filter(p => {
     const ts = new Date(p.created_at).getTime();
     return !isNaN(ts) && ts >= cutoff;
@@ -190,8 +189,15 @@ export async function fetchAll(orgConfig) {
     return true;
   });
 
-  console.log(`[fetchAll] ${unique.length} fresh posts (from ${allPosts.length} total)`);
-  return unique.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const posts = unique.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const diagnostics = results.map(result => ({
+    source: result.source,
+    status: result.status,
+    fetched: result.posts.length,
+    error: result.error || null,
+  }));
+  console.log(`[fetchAll] ${posts.length} fresh posts (from ${allPosts.length} total; ${lookbackHours}h window)`);
+  return withDiagnostics ? { posts, diagnostics } : posts;
 }
 
 export default fetchAll;
