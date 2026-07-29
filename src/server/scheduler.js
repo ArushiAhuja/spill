@@ -588,6 +588,10 @@ export async function runOrgCycle(orgId) {
         insertedIds.push(null);
       }
     }
+    // A fetch candidate can be rejected by the relevance/quality gates or be
+    // an already-known external post. Only inserted posts are visible signals,
+    // so use this count for customer-facing refresh status and anomaly checks.
+    const storedPosts = insertedIds.filter(Boolean).length;
 
     // Command-center: auto-create tickets for influencer/viral posts
     const isCommandCenter = ['coordinate', 'command_center', 'enterprise'].includes(org?.plan);
@@ -684,7 +688,7 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
     }
 
     // Post-cycle detectors
-    await checkAnomalies(orgId, newPosts.length).catch(err =>
+    await checkAnomalies(orgId, storedPosts).catch(err =>
       console.error('[anomaly] error:', err.message)
     );
     await detectIncidents(orgId, classified, insertedIds, incidentThreshold).catch(err =>
@@ -693,7 +697,7 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
 
     await query(
       'UPDATE refresh_logs SET status=$1, completed_at=NOW(), posts_fetched=$2, posts_escalated=$3 WHERE id=$4',
-      ['completed', newPosts.length, escalated.length, logId]
+      ['completed', storedPosts, escalated.length, logId]
     );
 
     // Run intelligence update once per cycle (debounced inside — skips if updated < 2h ago).
@@ -703,8 +707,8 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
       console.warn(`[org ${orgId}] intelligence update error:`, err.message)
     );
 
-    console.log(`[org ${orgId}] cycle done: ${newPosts.length} new, ${escalated.length} escalated`);
-    return { orgId, status: 'completed', postsFetched: newPosts.length, postsEscalated: escalated.length };
+    console.log(`[org ${orgId}] cycle done: ${storedPosts} stored, ${escalated.length} escalated`);
+    return { orgId, status: 'completed', postsFetched: storedPosts, postsEscalated: escalated.length };
   } catch (err) {
     console.error(`[org ${orgId}] cycle failed:`, err.message);
     if (logId) {
