@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Invoke Spill's production monitoring refresh every 15 minutes through EventBridge Scheduler.
+
+Parameters:
+  SpillRefreshUrl:
+    Type: String
+    Default: https://beforeitspills.com/api/cron/refresh
+    Description: Authenticated Spill cron endpoint.
+  SpillCronSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: The existing Vercel CRON_SECRET value. Never commit this value.
+
+Resources:
+  SpillRefreshLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: spill-production-refresh-lambda-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  SpillRefreshInvoker:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: spill-production-refresh
+      Description: Calls Spill's authenticated Vercel refresh endpoint.
+      Runtime: nodejs22.x
+      Handler: index.handler
+      Timeout: 300
+      MemorySize: 512
+      Role: !GetAtt SpillRefreshLambdaRole.Arn
+      Environment:
+        Variables:
+          SPILL_REFRESH_URL: !Ref SpillRefreshUrl
+          SPILL_CRON_SECRET: !Ref SpillCronSecret
+      Code:
+        ZipFile: |
+          exports.handler = async () => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 290000);
+            try {
+              const response = await fetch(process.env.SPILL_REFRESH_URL, {
+                method: 'POST',
+                headers: {
+                  'content-type': 'application/json',
+                  authorization: `Bearer ${process.env.SPILL_CRON_SECRET}`,
+                },
+                body: '{}',
+                signal: controller.signal,
+              });
+              const body = await response.text();
+              if (!response.ok) throw new Error(`Spill refresh HTTP ${response.status}: ${body.slice(0, 500)}`);
+              console.log(body.slice(0, 4000));
+              return { statusCode: response.status };
+            } finally {
+              clearTimeout(timeout);
+            }
+          };
+
+  SpillSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: spill-production-refresh-scheduler-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-spill-refresh
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt SpillRefreshInvoker.Arn
+
+  SpillMonitoringScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: spill-monitoring
+
+  SpillRefreshSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: spill-production-refresh-every-15-minutes
+      Description: Refresh all Spill organisations every 15 minutes.
+      GroupName: !Ref SpillMonitoringScheduleGroup
+      ScheduleExpression: rate(15 minutes)
+      FlexibleTimeWindow: { Mode: 'OFF' }
+      State: ENABLED
+      Target:
+        Arn: !GetAtt SpillRefreshInvoker.Arn
+        RoleArn: !GetAtt SpillSchedulerRole.Arn
+        Input: '{}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 2
+
+Outputs:
+  RefreshFunctionName:
+    Value: !Ref SpillRefreshInvoker
+  ScheduleName:
+    Value: !Ref SpillRefreshSchedule

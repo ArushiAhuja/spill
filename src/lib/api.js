@@ -167,6 +167,8 @@ export const api = {
   },
   getObservabilityOperators: () => request('GET', '/internal/observability/operators'),
   setObservabilityOperator: (email, granted, org_id = null) => request('POST', '/internal/observability/operators', { email, granted, org_id }),
+  createObservabilityWorkspace: (body) => request('POST', '/internal/observability/workspaces', body),
+  deleteObservabilityWorkspace: (org_id, confirmation) => request('DELETE', '/internal/observability/workspaces', { org_id, confirmation }),
   getObservabilityOrg: (id) => request('GET', `/internal/observability/organizations/${id}`),
   saveObservabilityPrompt: (id, body) => request('PUT', `/internal/observability/organizations/${id}`, body),
   rollbackObservabilityPrompt: (id, prompt_key, target_version) => request('PUT', `/internal/observability/organizations/${id}`, { prompt_key, target_version, action: 'rollback' }),
