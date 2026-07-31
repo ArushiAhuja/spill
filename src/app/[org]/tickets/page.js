@@ -33,6 +33,13 @@ const PRIORITY_LABELS = {
 }
 
 const PERSONALITIES = ['professional', 'friendly', 'apologetic', 'assertive']
+const LOB_OPTIONS = ['Air', 'Hotel', 'Bus', 'Cabs', 'Holidays', 'Payments', 'Other']
+const SMART_QUEUES = [
+  { key: 'all', label: 'All work' },
+  { key: 'unanswered_48h', label: 'Unanswered >48h', color: '#fb7185' },
+  { key: 'expedited', label: 'Expedited escalations', color: '#fbbf24' },
+  { key: 'pending_customer', label: 'Pending customer action', color: '#60a5fa' },
+]
 
 function timeAgo(ts) {
   if (!ts) return ''
@@ -151,6 +158,12 @@ export default function TicketsPage() {
   const [translatedText, setTranslatedText] = useState(null)
   const [filterAging, setFilterAging] = useState('')
   const [filterAwaiting, setFilterAwaiting] = useState(false)
+  const [smartQueue, setSmartQueue] = useState('all')
+  const [queueCounts, setQueueCounts] = useState({})
+  const [members, setMembers] = useState([])
+  const [toolsOpen, setToolsOpen] = useState(true)
+  const [metadataDraft, setMetadataDraft] = useState({ lob: '', booking_id: '', contact_email: '', contact_phone: '', use_case: '' })
+  const [exporting, setExporting] = useState(false)
   const currentUser = getUser()
 
   const loadTickets = useCallback(async () => {
@@ -163,16 +176,19 @@ export default function TicketsPage() {
       if (searchQuery) params.search = searchQuery
       if (filterAging) params.aging = filterAging
       if (filterAwaiting) params.awaiting_customer = 'true'
+      if (smartQueue !== 'all') params.queue = smartQueue
       const data = await api.getTickets(slug, params)
       setTickets(data.tickets || [])
       setStatusCounts(data.statusCounts || {})
       setTotal(data.total || 0)
+      setQueueCounts(data.queueCounts || {})
+      setMembers(data.members || [])
     } catch (e) {
       console.error(e)
     } finally {
       setLoading(false)
     }
-  }, [slug, statusTab, filterChannel, filterPriority, searchQuery, filterAging, filterAwaiting])
+  }, [slug, statusTab, filterChannel, filterPriority, searchQuery, filterAging, filterAwaiting, smartQueue])
 
   useEffect(() => { loadTickets() }, [loadTickets])
 
@@ -190,6 +206,8 @@ export default function TicketsPage() {
       const data = await api.getTicket(slug, ticket.id)
       setTicketDetail(data.ticket)
       setNotes(data.notes || [])
+      const fields = data.ticket.custom_fields || {}
+      setMetadataDraft({ lob: data.ticket.lob || '', booking_id: fields.booking_id || '', contact_email: fields.contact_email || '', contact_phone: fields.contact_phone || '', use_case: fields.use_case || '' })
     } catch (e) {
       console.error(e)
     } finally {
@@ -204,6 +222,38 @@ export default function TicketsPage() {
       setTicketDetail(d => ({ ...d, status }))
       setSelectedTicket(t => t?.id === id ? { ...t, status } : t)
     }
+  }
+
+  async function updateAssignee(assignedTo) {
+    if (!ticketDetail) return
+    const member = members.find(item => item.id === assignedTo)
+    const data = await api.updateTicket(slug, ticketDetail.id, { assigned_to: assignedTo || null, assigned_name: member?.name || null })
+    setTicketDetail(current => ({ ...current, ...data.ticket, assigned_user_name: member?.name || null }))
+    setSelectedTicket(current => current?.id === data.ticket.id ? { ...current, ...data.ticket, assigned_user_name: member?.name || null } : current)
+    loadTickets()
+  }
+
+  async function saveMetadata() {
+    if (!ticketDetail) return
+    setSaving(true)
+    try {
+      const custom_fields = Object.fromEntries(Object.entries(metadataDraft).filter(([key, value]) => key !== 'lob' && String(value || '').trim()).map(([key, value]) => [key, String(value).trim()]))
+      const data = await api.updateTicket(slug, ticketDetail.id, { lob: metadataDraft.lob, custom_fields })
+      setTicketDetail(current => ({ ...current, ...data.ticket }))
+      setSelectedTicket(current => current?.id === data.ticket.id ? { ...current, ...data.ticket } : current)
+      loadTickets()
+    } finally { setSaving(false) }
+  }
+
+  async function downloadRawData() {
+    setExporting(true)
+    try {
+      const blob = await api.exportTickets(slug)
+      const href = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = href; link.download = `${slug}-spill-tickets.csv`; link.click()
+      URL.revokeObjectURL(href)
+    } catch (e) { console.error(e) } finally { setExporting(false) }
   }
 
   async function submitNote() {
@@ -266,7 +316,8 @@ export default function TicketsPage() {
     if (!newTicket.title.trim()) return
     setSaving(true)
     try {
-      const payload = { ...newTicket }
+      const payload = { ...newTicket, custom_fields: newTicket.booking_id ? { booking_id: newTicket.booking_id } : {} }
+      delete payload.booking_id
       if (mmtEnabled) {
         const bd = {}
         for (let n = 1; n <= 8; n++) {
@@ -310,14 +361,14 @@ export default function TicketsPage() {
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#0d0f1a' }}>
       <OrgNav slug={slug} />
-      <main style={{ marginLeft: 208, flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+      <main style={{ marginLeft: 208, flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#0b1220' }}>
 
         {/* Header */}
         <div style={{ padding: '20px 28px 0', borderBottom: '1px solid #1e2535', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <div>
               <h1 style={{ fontSize: 18, fontWeight: 500, color: '#e2e8f0', margin: 0 }}>Tickets</h1>
-              <p style={{ fontSize: 12, color: '#475569', margin: '4px 0 0' }}>Social inbox · multi-channel</p>
+              <p style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 0' }}>Priority-first social inbox · multi-channel</p>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               {selected.size > 0 && (
@@ -326,6 +377,7 @@ export default function TicketsPage() {
                 </button>
               )}
               <button onClick={() => setShowCanned(true)} style={btnStyle('#1e2535', '#94a3b8')}>canned responses</button>
+              <button onClick={downloadRawData} disabled={exporting} style={btnStyle('#1e2535', '#cbd5e1')}>{exporting ? 'exporting…' : 'download raw data'}</button>
               <button onClick={() => setShowNewTicket(true)} style={btnStyle('#3b82f6', '#fff')}>+ new ticket</button>
             </div>
           </div>
@@ -338,7 +390,7 @@ export default function TicketsPage() {
               return (
                 <button
                   key={tab.key}
-                  onClick={() => { setStatusTab(tab.key); setSelected(new Set()) }}
+                  onClick={() => { setStatusTab(tab.key); setSmartQueue('all'); setSelected(new Set()) }}
                   style={{
                     padding: '8px 16px',
                     background: 'none',
@@ -366,6 +418,15 @@ export default function TicketsPage() {
                   )}
                 </button>
               )
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '12px 0 14px' }}>
+            <span style={{ fontSize: 11, color: '#94a3b8', alignSelf: 'center', fontWeight: 700, letterSpacing: '.06em' }}>SMART QUEUES</span>
+            {SMART_QUEUES.map(queue => {
+              const active = smartQueue === queue.key
+              const count = queue.key === 'all' ? total : (queueCounts[queue.key] || 0)
+              const color = queue.color || '#cbd5e1'
+              return <button key={queue.key} onClick={() => { setSmartQueue(queue.key); setStatusTab('all'); setSelected(new Set()) }} style={{ ...btnStyle(active ? `${color}22` : '#111827', active ? color : '#cbd5e1'), border: `1px solid ${active ? `${color}66` : '#334155'}`, fontSize: 12, padding: '6px 10px' }}>{queue.label} <span style={{ fontFamily:'var(--font-mono)', marginLeft:4 }}>{count}</span></button>
             })}
           </div>
         </div>
@@ -411,7 +472,7 @@ export default function TicketsPage() {
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
           {/* Ticket list */}
-          <div style={{ width: selectedTicket ? 380 : '100%', borderRight: selectedTicket ? '1px solid #1e2535' : 'none', overflow: 'auto', flexShrink: 0 }}>
+          <div style={{ width: selectedTicket ? 340 : '100%', borderRight: selectedTicket ? '1px solid #334155' : 'none', overflow: 'auto', flexShrink: 0, background:'#0f172a' }}>
             {/* Select all */}
             <div style={{ padding: '8px 16px', borderBottom: '1px solid #1e2535', display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="checkbox" checked={selected.size > 0 && selected.size === tickets.length} onChange={selectAll} style={{ cursor: 'pointer' }} />
@@ -470,9 +531,7 @@ export default function TicketsPage() {
                           </span>
                         )}
                         <StatusBadge status={ticket.status} />
-                        {ticket.assigned_user_name && (
-                          <span style={{ fontSize: 11, color: '#475569' }}>→ {ticket.assigned_user_name}</span>
-                        )}
+                        <span style={{ fontSize: 11, color: ticket.assigned_user_name || ticket.assigned_name ? '#cbd5e1' : '#94a3b8' }}>Agent: {ticket.assigned_user_name || ticket.assigned_name || 'Unassigned'}</span>
                         {parseInt(ticket.note_count) > 0 && (
                           <span style={{ fontSize: 11, color: '#475569' }}>💬 {ticket.note_count}</span>
                         )}
@@ -484,6 +543,7 @@ export default function TicketsPage() {
                           ))}
                         </div>
                       )}
+                      {ticket.lob && <span style={{ fontSize: 10, fontWeight: 700, color:'#67e8f9', letterSpacing:'.04em' }}>{ticket.lob.toUpperCase()}</span>}
                       {mmtEnabled && ticket.customer_labels?.length > 0 && (
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
                           {ticket.customer_labels.map(lbl => <CustomerLabelBadge key={lbl} label={lbl} />)}
@@ -501,11 +561,12 @@ export default function TicketsPage() {
 
           {/* Ticket detail panel */}
           {selectedTicket && (
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', display: 'flex', background: '#0b1220' }}>
               {loadingDetail ? (
                 <div style={{ padding: 40, color: '#475569', fontSize: 13 }}>loading...</div>
               ) : ticketDetail ? (
                 <>
+                  <div style={{ flex: 1, minWidth: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
                   {/* Detail header */}
                   <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #1e2535', flexShrink: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -717,7 +778,29 @@ export default function TicketsPage() {
                         </div>
                       )}
                     </div>
+                    </div>
                   </div>
+                  <aside style={{ width: toolsOpen ? 300 : 42, flexShrink: 0, overflow: 'auto', borderLeft: '1px solid #334155', background: '#111827', transition: 'width .15s ease' }}>
+                    <button onClick={() => setToolsOpen(open => !open)} aria-expanded={toolsOpen} style={{ width:'100%', padding:'12px', background:'transparent', border:0, borderBottom:'1px solid #334155', color:'#e2e8f0', textAlign:toolsOpen?'left':'center', fontSize:12, fontWeight:700 }}>{toolsOpen ? 'Ticket controls  ›' : '‹'}</button>
+                    {toolsOpen && <div style={{ padding:14 }}>
+                      <p style={panelLabel}>OWNER</p>
+                      <select value={ticketDetail.assigned_to || ''} onChange={e => updateAssignee(e.target.value)} style={{ ...selectStyle({ width:'100%' }), fontSize:13 }}>
+                        <option value="">Unassigned</option>
+                        {members.map(member => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}
+                      </select>
+                      <p style={{ fontSize:12, color:'#cbd5e1', margin:'8px 0 18px' }}>Agent: {ticketDetail.assigned_user_name || ticketDetail.assigned_name || 'Unassigned'}</p>
+
+                      <p style={panelLabel}>CUSTOM METADATA</p>
+                      <label style={miniLabel}>Line of business</label>
+                      <select value={metadataDraft.lob} onChange={e => setMetadataDraft(d => ({ ...d, lob:e.target.value }))} style={selectStyle({ width:'100%' })}><option value="">Unclassified</option>{LOB_OPTIONS.map(lob => <option key={lob} value={lob}>{lob}</option>)}</select>
+                      <label style={miniLabel}>Booking ID</label><input value={metadataDraft.booking_id} onChange={e => setMetadataDraft(d => ({ ...d, booking_id:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="Booking / case ID" />
+                      <label style={miniLabel}>Contact email</label><input value={metadataDraft.contact_email} onChange={e => setMetadataDraft(d => ({ ...d, contact_email:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="customer@email.com" />
+                      <label style={miniLabel}>Contact phone</label><input value={metadataDraft.contact_phone} onChange={e => setMetadataDraft(d => ({ ...d, contact_phone:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="Phone number" />
+                      <label style={miniLabel}>Use case</label><input value={metadataDraft.use_case} onChange={e => setMetadataDraft(d => ({ ...d, use_case:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="e.g. refund, cancellation" />
+                      <button onClick={saveMetadata} disabled={saving} style={{ ...btnStyle('#2563eb','#fff'), marginTop:12, width:'100%', fontSize:13 }}>{saving ? 'saving…' : 'save metadata'}</button>
+                      <div style={{ marginTop:18, paddingTop:14, borderTop:'1px solid #334155' }}><p style={panelLabel}>DATA ACCESS</p><p style={{fontSize:11,color:'#94a3b8',lineHeight:1.5,margin:'0 0 8px'}}>CSV is Excel-ready and includes tags, LOB, owner, SLA and custom fields.</p><button onClick={downloadRawData} disabled={exporting} style={{...btnStyle('#1e293b','#e2e8f0'),width:'100%'}}>{exporting ? 'exporting…' : 'download CSV'}</button><code style={{display:'block',overflowWrap:'anywhere',fontSize:10,color:'#93c5fd',marginTop:10}}>/api/orgs/{slug}/tickets/export?format=json</code></div>
+                    </div>}
+                  </aside>
                 </>
               ) : null}
             </div>
@@ -749,6 +832,11 @@ export default function TicketsPage() {
 
           <label style={labelStyle}>URL</label>
           <input value={newTicket.url} onChange={e => setNewTicket(t => ({ ...t, url: e.target.value }))} style={inputStyle({ width: '100%' })} placeholder="link to original post" />
+
+          <label style={labelStyle}>Line of business</label>
+          <select value={newTicket.lob || ''} onChange={e => setNewTicket(t => ({ ...t, lob: e.target.value }))} style={selectStyle({ width:'100%' })}><option value="">Unclassified</option>{LOB_OPTIONS.map(lob => <option key={lob} value={lob}>{lob}</option>)}</select>
+          <label style={labelStyle}>Booking / case ID</label>
+          <input value={newTicket.booking_id || ''} onChange={e => setNewTicket(t => ({ ...t, booking_id: e.target.value }))} style={inputStyle({ width:'100%' })} placeholder="Booking ID or customer reference" />
 
           {mmtEnabled && (
             <>
@@ -933,3 +1021,5 @@ const labelStyle = {
   textTransform: 'uppercase',
   letterSpacing: '0.06em',
 }
+const panelLabel = { fontSize:10, color:'#94a3b8', fontWeight:800, letterSpacing:'.1em', margin:'0 0 8px' }
+const miniLabel = { display:'block', fontSize:11, color:'#cbd5e1', margin:'12px 0 4px' }

@@ -24,6 +24,7 @@ export async function GET(request, { params }) {
     const search = url.searchParams.get('search') || null;
     const aging = url.searchParams.get('aging') || null;
     const awaiting_customer = url.searchParams.get('awaiting_customer') || null;
+    const queue = url.searchParams.get('queue') || null;
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '100'), 500);
     const offset = parseInt(url.searchParams.get('offset') || '0');
 
@@ -53,6 +54,13 @@ export async function GET(request, { params }) {
     if (awaiting_customer === 'true') {
       conditions.push(`t.awaiting_customer = true`);
     }
+    if (queue === 'unanswered_48h') {
+      conditions.push(`t.status <> 'closed' AND t.first_responded_at IS NULL AND t.created_at < NOW() - INTERVAL '48 hours'`);
+    } else if (queue === 'expedited') {
+      conditions.push(`t.status <> 'closed' AND (t.priority IN ('urgent','high') OR t.sla_breached = true OR t.sla_first_response_at < NOW() + INTERVAL '30 minutes')`);
+    } else if (queue === 'pending_customer') {
+      conditions.push(`t.status <> 'closed' AND (t.awaiting_customer = true OR t.status = 'awaiting')`);
+    }
 
     const where = conditions.join(' AND ');
 
@@ -72,16 +80,33 @@ export async function GET(request, { params }) {
       values
     );
 
-    // Status summary counts
-    const { rows: statusCounts } = await query(
+    // Status summary and queue counts remain unfiltered so advisors can navigate
+    // directly to the next most important queue.
+    const [{ rows: statusCounts }, { rows: queueCounts }, { rows: members }] = await Promise.all([
+      query(
       `SELECT status, COUNT(*) as count FROM tickets WHERE org_id = $1 GROUP BY status`,
       [access.orgId]
-    );
+      ),
+      query(
+        `SELECT
+          COUNT(*) FILTER (WHERE status <> 'closed' AND first_responded_at IS NULL AND created_at < NOW() - INTERVAL '48 hours') AS unanswered_48h,
+          COUNT(*) FILTER (WHERE status <> 'closed' AND (priority IN ('urgent','high') OR sla_breached = true OR sla_first_response_at < NOW() + INTERVAL '30 minutes')) AS expedited,
+          COUNT(*) FILTER (WHERE status <> 'closed' AND (awaiting_customer = true OR status = 'awaiting')) AS pending_customer
+         FROM tickets WHERE org_id=$1`, [access.orgId]
+      ),
+      query(
+        `SELECT u.id, u.name, u.email, om.role
+         FROM org_members om JOIN users u ON u.id=om.user_id
+         WHERE om.org_id=$1 ORDER BY u.name NULLS LAST, u.email`, [access.orgId]
+      ),
+    ]);
 
     return NextResponse.json({
       tickets,
       total: parseInt(count),
       statusCounts: statusCounts.reduce((acc, r) => { acc[r.status] = parseInt(r.count); return acc; }, {}),
+      queueCounts: Object.fromEntries(Object.entries(queueCounts[0] || {}).map(([key, value]) => [key, parseInt(value || '0')])),
+      members,
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
@@ -100,7 +125,7 @@ export async function POST(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const body = await request.json();
-    const { title, channel = 'manual', post_id, author, author_handle, follower_count, url: ticketUrl, tags, priority = 'normal', body: ticketBody, assigned_to, verified_handle = false, booking_details } = body;
+    const { title, channel = 'manual', post_id, author, author_handle, follower_count, url: ticketUrl, tags, priority = 'normal', body: ticketBody, assigned_to, verified_handle = false, booking_details, lob, custom_fields } = body;
 
     if (!title) return NextResponse.json({ error: 'title required' }, { status: 400 });
 
@@ -114,13 +139,13 @@ export async function POST(request, { params }) {
     const initialLabels = computeCustomerLabels({ follower_count: follower_count || 0, verified_handle, mention_count: 1 });
 
     const { rows: [ticket] } = await query(
-      `INSERT INTO tickets (org_id, post_id, source, channel, title, body, author, author_handle, follower_count, url, tags, priority, assigned_to, sla_first_response_at, verified_handle, booking_details, customer_labels)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      `INSERT INTO tickets (org_id, post_id, source, channel, title, body, author, author_handle, follower_count, url, tags, priority, assigned_to, sla_first_response_at, verified_handle, booking_details, customer_labels, lob, custom_fields)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING *`,
       [access.orgId, post_id || null, 'manual', channel, title, ticketBody || null,
        author || null, author_handle || null, follower_count || 0, ticketUrl || null,
        tags || [], priority, assigned_to || null, slaFirstAt,
-       verified_handle, booking_details || {}, initialLabels]
+       verified_handle, booking_details || {}, initialLabels, typeof lob === 'string' ? lob.trim() || null : null, custom_fields && typeof custom_fields === 'object' ? custom_fields : {}]
     );
 
     return NextResponse.json({ ticket }, { status: 201 });

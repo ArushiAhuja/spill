@@ -78,6 +78,7 @@ export const api = {
   // Stats
   getSentimentStats: (slug, days = 14) => request('GET', `/orgs/${slug}/stats?days=${days}`),
   getStats: (slug, days = 14) => request('GET', `/orgs/${slug}/stats?days=${days}`),
+  getOperations: (slug) => request('GET', `/orgs/${slug}/operations`),
 
   // Post notes
   updatePostNotes: (slug, id, notes) => request('PATCH', `/orgs/${slug}/posts/${id}`, { notes }),
@@ -135,6 +136,12 @@ export const api = {
   addTicketNote: (slug, id, body) => request('POST', `/orgs/${slug}/tickets/${id}/notes`, body),
   bulkTickets: (slug, body) => request('POST', `/orgs/${slug}/tickets/bulk`, body),
   getAIResponse: (slug, id, body) => request('POST', `/orgs/${slug}/tickets/${id}/ai-response`, body),
+  exportTickets: (slug, format = 'csv') => fetch(`/api/orgs/${slug}/tickets/export?format=${format}`, {
+    headers: { Authorization: `Bearer ${getToken() || ''}` },
+  }).then(async res => {
+    if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || `HTTP ${res.status}`) }
+    return format === 'json' ? res.json() : res.blob()
+  }),
 
   // Prompt management
   listPrompts: (slug) => request('GET', `/orgs/${slug}/prompts`),

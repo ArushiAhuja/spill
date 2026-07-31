@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/api'
+import OrgNav from '@/components/OrgNav'
 
 // Pure SVG mini sparkline — no deps
 function Sparkline({ data, color = '#3b82f6', width = 160, height = 36 }) {
@@ -86,17 +87,25 @@ export default function AnalyticsPage({ params }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [days, setDays] = useState(14)
+  const [operations, setOperations] = useState(null)
 
   useEffect(() => {
-    setLoading(true)
-    api.getStats(slug, days)
-      .then(data => { setStats(data || []); setLoading(false) })
-      .catch(err => {
+    let active = true
+    async function load() {
+      setLoading(true)
+      try {
+        const [statsData, operationsData] = await Promise.all([api.getStats(slug, days), api.getOperations(slug)])
+        if (!active) return
+        setStats(statsData || []); setOperations(operationsData); setError('')
+      } catch (err) {
         if (err.message === 'unauthorized') router.replace('/login')
-        else setError(err.message || 'failed to load')
-        setLoading(false)
-      })
-  }, [slug, days])
+        else if (active) setError(err.message || 'failed to load')
+      } finally { if (active) setLoading(false) }
+    }
+    load()
+    const refresh = setInterval(load, 30000)
+    return () => { active = false; clearInterval(refresh) }
+  }, [slug, days, router])
 
   // Aggregate totals
   const totalPosts = stats.reduce((sum, cat) => sum + (cat.trend || []).reduce((s, d) => s + d.count, 0), 0)
@@ -131,12 +140,14 @@ export default function AnalyticsPage({ params }) {
   )
 
   return (
-    <div style={{ maxWidth: 860, margin: '0 auto', padding: '40px 24px' }}>
+    <div style={{ minHeight:'100vh', background:'#0b1220' }}>
+      <OrgNav slug={slug} />
+      <main className="org-main" style={{ maxWidth: 1440, margin: '0 auto', padding: '34px clamp(18px,3vw,48px)' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 500, color: '#e2e8f0', marginBottom: 4 }}>analytics</div>
-          <div style={{ fontSize: 12.5, color: '#64748b' }}>sentiment & volume trends per category.</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#f8fafc', marginBottom: 5 }}>Operations intelligence</div>
+          <div style={{ fontSize: 14, color: '#cbd5e1' }}>Live ticketing, escalation and social-signal health. Refreshes every 30 seconds.</div>
         </div>
         <div style={{ display: 'flex', gap: 2, padding: 3, background: '#0d0f1a', borderRadius: 8, border: '1px solid #1e2535' }}>
           {[7, 14, 30].map(d => (
@@ -149,8 +160,25 @@ export default function AnalyticsPage({ params }) {
 
       {error && <div style={{ fontSize: 12.5, color: '#f87171', padding: '10px 14px', background: 'rgba(248,113,113,0.08)', borderRadius: 8, border: '1px solid rgba(248,113,113,0.2)', marginBottom: 20 }}>{error}</div>}
 
+      {operations && <>
+        <section style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))', gap:12, marginBottom:18 }}>
+          {[
+            ['incoming last 24h', operations.volume?.tickets_24h || 0, '#60a5fa'],
+            ['open work', operations.volume?.open_tickets || 0, '#e2e8f0'],
+            ['SLA at risk', operations.volume?.sla_risk || 0, '#fb7185'],
+            ['expedited', operations.volume?.expedited || 0, '#fbbf24'],
+          ].map(([label, value, color]) => <div key={label} style={{background:'#111827',border:'1px solid #334155',borderRadius:12,padding:'18px'}}><div style={{fontSize:11,fontWeight:800,letterSpacing:'.08em',color:'#cbd5e1',textTransform:'uppercase'}}>{label}</div><div style={{fontSize:28,fontWeight:700,fontFamily:'var(--font-mono)',color,marginTop:8}}>{value}</div></div>)}
+        </section>
+        <section style={{ display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1.2fr) minmax(0,1.2fr)', gap:12, marginBottom:20 }}>
+          <LivePanel title="Volume by LOB" empty="Tag tickets with a Line of Business to populate this view.">{operations.lob_breakdown?.map(row => <MetricRow key={row.lob} label={row.lob} value={row.count} color="#67e8f9" />)}</LivePanel>
+          <LivePanel title="Influencer & escalation alerts" empty="No active high-reach tickets.">{operations.influencer_alerts?.map(ticket => <SignalRow key={ticket.id} title={ticket.title} meta={`${ticket.author || 'Unknown'} · ${(ticket.follower_count || 0).toLocaleString()} followers`} color="#c084fc" href={ticket.url} />)}</LivePanel>
+          <LivePanel title="Highest-traction posts" empty="No social signals collected yet.">{operations.top_traction?.map(post => <SignalRow key={post.id} title={post.title} meta={`${post.source} · ${Number(post.raw_engagement || 0).toLocaleString()} engagement · score ${post.escalation_score || 0}`} color="#60a5fa" href={post.url} />)}</LivePanel>
+        </section>
+        <section style={{ background:'#111827', border:'1px solid #334155', borderRadius:12, padding:18, marginBottom:20 }}><div style={{fontSize:11,fontWeight:800,letterSpacing:'.08em',color:'#cbd5e1',textTransform:'uppercase',marginBottom:10}}>Top-trending issues · last 7 days</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10}}>{operations.trending_issues?.map(issue => <div key={issue.category} style={{background:'#0b1220',border:'1px solid #1e293b',borderRadius:8,padding:12}}><div style={{fontSize:14,fontWeight:650,color:'#f8fafc'}}>{issue.category}</div><div style={{fontSize:12,color:'#cbd5e1',marginTop:6}}>{issue.count} signals · escalation {issue.max_escalation || 0}</div></div>)}</div></section>
+      </>}
+
       {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 28 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 12, marginBottom: 28 }}>
         {[
           { label: 'total signals', value: totalPosts.toLocaleString(), color: '#e2e8f0' },
           { label: 'categories tracked', value: stats.length, color: '#e2e8f0' },
@@ -229,6 +257,14 @@ export default function AnalyticsPage({ params }) {
           )
         })}
       </div>
+      </main>
     </div>
   )
 }
+
+function LivePanel({ title, empty, children }) {
+  const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : []
+  return <section style={{background:'#111827',border:'1px solid #334155',borderRadius:12,padding:18,minHeight:170}}><div style={{fontSize:11,fontWeight:800,letterSpacing:'.08em',color:'#cbd5e1',textTransform:'uppercase',marginBottom:10}}>{title}</div>{items.length ? <div style={{display:'grid',gap:8}}>{items}</div> : <p style={{fontSize:13,color:'#94a3b8',lineHeight:1.5,margin:0}}>{empty}</p>}</section>
+}
+function MetricRow({ label, value, color }) { return <div style={{display:'flex',justifyContent:'space-between',gap:8,padding:'8px 0',borderBottom:'1px solid #1e293b'}}><span style={{fontSize:13,color:'#e2e8f0'}}>{label}</span><strong style={{fontFamily:'var(--font-mono)',fontSize:14,color}}>{value}</strong></div> }
+function SignalRow({ title, meta, color, href }) { const content=<><div style={{fontSize:13,color:'#f8fafc',fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{title || 'Untitled signal'}</div><div style={{fontSize:11,color:'#cbd5e1',marginTop:3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{meta}</div></>; return href ? <a href={href} target="_blank" rel="noreferrer" style={{display:'block',padding:'8px',borderLeft:`3px solid ${color}`,background:'#0b1220',borderRadius:5}}>{content}</a> : <div style={{padding:'8px',borderLeft:`3px solid ${color}`,background:'#0b1220',borderRadius:5}}>{content}</div> }

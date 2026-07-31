@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 // Bump when adding new migration steps. Cold starts check ONE DB query instead of
 // replaying all 55 ALTER/CREATE statements, keeping route cold-start overhead < 50ms.
-const MIGRATION_VERSION = 28;
+const MIGRATION_VERSION = 29;
 
 export async function ensureMigrations() {
   // Fast path: check DB-persisted version. Creates app_settings on first ever run.
@@ -257,6 +257,12 @@ export async function ensureMigrations() {
   await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reopen_count INTEGER DEFAULT 0`);
   await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS awaiting_customer BOOLEAN DEFAULT false`);
   await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS last_customer_reply_at TIMESTAMPTZ`);
+  // Structured operational fields are intentionally independent from free-form tags.
+  // They power LOB queues, supervisor reporting, exports, and BI integrations.
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS lob TEXT`);
+  await query(`ALTER TABLE tickets ADD COLUMN IF NOT EXISTS custom_fields JSONB DEFAULT '{}'`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_tickets_org_lob ON tickets(org_id, lob, created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_tickets_sla_open ON tickets(org_id, status, sla_first_response_at) WHERE status <> 'closed'`);
 
   // agent_sessions table (MMT timesheet)
   await query(`

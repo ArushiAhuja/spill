@@ -51,8 +51,8 @@ export async function PATCH(request, { params }) {
     if (!access) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
     const body = await request.json();
-    const { status, priority, assigned_to, assigned_name, tags, forward_to,
-            is_sticky, verified_handle, booking_details, awaiting_customer } = body;
+    let { status, priority, assigned_to, assigned_name, tags, forward_to,
+            is_sticky, verified_handle, booking_details, awaiting_customer, lob, custom_fields } = body;
 
     const { rows: [current] } = await query(
       'SELECT * FROM tickets WHERE id = $1 AND org_id = $2',
@@ -76,14 +76,27 @@ export async function PATCH(request, { params }) {
     }
     if (priority !== undefined) { sets.push(`priority = $${idx++}`); values.push(priority); }
     if (assigned_to !== undefined) {
+      if (assigned_to) {
+        const { rows: [member] } = await query(
+          `SELECT u.id,u.name FROM org_members om JOIN users u ON u.id=om.user_id WHERE om.org_id=$1 AND u.id=$2`,
+          [access.orgId, assigned_to]
+        );
+        if (!member) return NextResponse.json({ error: 'assignee must be a member of this workspace' }, { status: 400 });
+        assigned_name = assigned_name || member.name;
+      }
       sets.push(`assigned_to = $${idx++}`); values.push(assigned_to);
-      if (assigned_name) { sets.push(`assigned_name = $${idx++}`); values.push(assigned_name); }
+      sets.push(`assigned_name = $${idx++}`); values.push(assigned_name || null);
     }
     if (tags !== undefined) { sets.push(`tags = $${idx++}`); values.push(tags); }
     if (is_sticky !== undefined) { sets.push(`is_sticky = $${idx++}`); values.push(!!is_sticky); }
     if (verified_handle !== undefined) { sets.push(`verified_handle = $${idx++}`); values.push(!!verified_handle); }
     if (booking_details !== undefined) { sets.push(`booking_details = $${idx++}`); values.push(booking_details); }
     if (awaiting_customer !== undefined) { sets.push(`awaiting_customer = $${idx++}`); values.push(!!awaiting_customer); }
+    if (lob !== undefined) { sets.push(`lob = $${idx++}`); values.push(typeof lob === 'string' ? lob.trim() || null : null); }
+    if (custom_fields !== undefined) {
+      if (!custom_fields || typeof custom_fields !== 'object' || Array.isArray(custom_fields)) return NextResponse.json({ error: 'custom_fields must be an object' }, { status: 400 });
+      sets.push(`custom_fields = $${idx++}`); values.push(custom_fields);
+    }
     sets.push(`updated_at = NOW()`);
 
     const { rows: [ticket] } = await query(
