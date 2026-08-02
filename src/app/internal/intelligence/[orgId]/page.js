@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import { TraceDetail } from '@/components/TraceDetail'
 
 const card = { background: '#12151e', border: '1px solid #1e2535', borderRadius: 10, padding: 16 }
 const mono = { fontFamily: 'var(--font-mono),ui-monospace,monospace' }
@@ -10,6 +11,7 @@ export default function OrgIntelligencePage({ params }) {
   const id = params.orgId
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
+  const [pageError, setPageError] = useState('')
   const [selected, setSelected] = useState(null)
   const [content, setContent] = useState('')
   const [summary, setSummary] = useState('')
@@ -21,6 +23,10 @@ export default function OrgIntelligencePage({ params }) {
   const [running, setRunning] = useState(false)
   const [evaluations, setEvaluations] = useState(null)
   const [evaluating, setEvaluating] = useState(false)
+  const [selectedTraceId, setSelectedTraceId] = useState(null)
+  const [traceDetail, setTraceDetail] = useState(null)
+  const [traceError, setTraceError] = useState('')
+  const [traceLoading, setTraceLoading] = useState(false)
 
   function choose(prompt) {
     setSelected(prompt.prompt_key)
@@ -35,10 +41,32 @@ export default function OrgIntelligencePage({ params }) {
     if (!selected && next.prompts?.[0]) choose(next.prompts[0])
   }
 
-  useEffect(() => { load().catch(e => setError(e.message)) }, [id])
+  useEffect(() => { load().catch(e => setPageError(e.message)) }, [id])
+
+  async function openTrace(traceId) {
+    setTraceLoading(true)
+    setTraceError('')
+    try {
+      const detail = await api.getObservabilityTraces({ trace_id: traceId, org_id: id })
+      setSelectedTraceId(traceId)
+      setTraceDetail(detail)
+    } catch (e) {
+      setTraceError(e.message)
+    } finally {
+      setTraceLoading(false)
+    }
+  }
+
+  async function overrideTrace({ traceId, note }) {
+    const result = await api.overrideObservabilityTrace(traceId, note)
+    const detail = await api.getObservabilityTraces({ trace_id: traceId, org_id: id })
+    setTraceDetail(detail)
+    return result
+  }
 
   async function save() {
     setSaving(true)
+    setError('')
     try {
       await api.saveObservabilityPrompt(id, { prompt_key: selected, content, change_summary: summary })
       await load()
@@ -48,6 +76,7 @@ export default function OrgIntelligencePage({ params }) {
 
   async function rollback(version) {
     setSaving(true)
+    setError('')
     try {
       await api.rollbackObservabilityPrompt(id, selected, version)
       await load()
@@ -57,6 +86,7 @@ export default function OrgIntelligencePage({ params }) {
   async function execute() {
     setRunning(true)
     setRun(null)
+    setError('')
     try {
       const baseline = { org_id: id, complaint, prompt_key: selected || 'classifier_system', model }
       const current = await api.runObservabilityPlayground(baseline)
@@ -69,31 +99,36 @@ export default function OrgIntelligencePage({ params }) {
 
   async function saveAgentConfig(agentName, config, changeSummary) {
     setSaving(true)
+    setError('')
     try { await api.saveObservabilityAgentConfig(id, agentName, config, changeSummary); await load() } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
 
   async function saveProfile(profile) {
     setSaving(true)
+    setError('')
     try { await api.saveObservabilityProfile(id, profile); await load() } catch (e) { setError(e.message) } finally { setSaving(false) }
   }
 
   async function runEvaluation() {
     const agent = data.agent_configs?.find(config => config.prompt_key === selected) || data.agent_configs?.find(config => config.agent_name === 'category')
     setEvaluating(true)
+    setError('')
     try { await api.runObservabilityEvaluation({ org_id: id, agent_name: agent?.agent_name || 'category', prompt_key: selected || 'classifier_system', model }); await load() } catch (e) { setError(e.message) } finally { setEvaluating(false) }
   }
 
   async function createEvaluationCase(input, expected_output, bucket) {
     const agent = data.agent_configs?.find(config => config.prompt_key === selected) || data.agent_configs?.find(config => config.agent_name === 'category')
+    setError('')
     try { await api.createObservabilityEvaluationCase({ org_id: id, agent_name: agent?.agent_name || 'category', input, expected_output, bucket }); await load() } catch (e) { setError(e.message) }
   }
 
   async function saveExperiment() {
     const agent = data.agent_configs?.find(config => config.prompt_key === selected) || data.agent_configs?.find(config => config.agent_name === 'category')
+    setError('')
     try { await api.createObservabilityExperiment({ org_id: id, agent_name: agent?.agent_name || 'category', prompt_key: selected || 'classifier_system', baseline_content: content, candidate_content: override, baseline_model: model, candidate_model: model }); await load() } catch (e) { setError(e.message) }
   }
 
-  if (error) return <main style={{ padding: 40, color: '#f87171', background: '#0d0f1a', minHeight: '100vh' }}>Internal dashboard: {error}</main>
+  if (pageError) return <main style={{ padding: 40, color: '#f87171', background: '#0d0f1a', minHeight: '100vh' }}>Internal dashboard: {pageError}</main>
   if (!data) return <main style={{ padding: 40, color: '#94a3b8', background: '#0d0f1a', minHeight: '100vh' }}>Loading organisation intelligence…</main>
 
   const active = data.prompts?.find(p => p.prompt_key === selected)
@@ -126,7 +161,17 @@ export default function OrgIntelligencePage({ params }) {
       </div>
     </section>
 
-    <RecentTraces traces={data.recent_traces} />
+    {error && <div style={{ ...card, marginBottom: 18, color: '#f87171', fontSize: 12 }}>{error}</div>}
+
+    <RecentTraces
+      traces={data.recent_traces}
+      selectedId={selectedTraceId}
+      detail={traceDetail}
+      loading={traceLoading}
+      error={traceError}
+      onOpen={openTrace}
+      onOverride={overrideTrace}
+    />
 
     <ContextPanel organization={data.organization} context={data.prompt_context} agentConfigs={data.agent_configs} saving={saving} onSaveProfile={saveProfile} />
     <AgentConfigPanel configs={data.agent_configs} versions={data.agent_config_versions} saving={saving} onSave={saveAgentConfig} />
@@ -177,8 +222,51 @@ export default function OrgIntelligencePage({ params }) {
   </main>
 }
 
-function RecentTraces({ traces }) {
-  return <section style={{ ...card, marginBottom: 18 }}><div style={{ ...mono, fontSize: 10, color: '#94a3b8' }}>RECENT TRACES</div>{traces?.length ? traces.map(trace => <div key={trace.id} style={{ borderTop: '1px solid #1e2535', padding: '8px 0', fontSize: 11 }}><span style={{ color: trace.decision === 'surfaced' ? '#4ade80' : '#fbbf24' }}>{trace.decision}</span> · {trace.title || 'candidate signal'}<div style={{ ...mono, color: '#64748b', fontSize: 9, marginTop: 3 }}>{trace.trace_key || trace.id} · {trace.source} · {new Date(trace.created_at).toLocaleString()}</div></div>) : <p style={{ color: '#64748b', fontSize: 12 }}>No recorded traces yet.</p>}</section>
+function RecentTraces({ traces, selectedId, detail, loading, error, onOpen, onOverride }) {
+  return (
+    <section style={{ display: 'grid', gridTemplateColumns: 'minmax(280px,1fr) minmax(320px,1.1fr)', gap: 12, marginBottom: 18, alignItems: 'start' }}>
+      <div style={card}>
+        <div style={{ ...mono, fontSize: 10, color: '#94a3b8', marginBottom: 8 }}>RECENT TRACES</div>
+        {traces?.length ? traces.map(trace => (
+          <button
+            key={trace.id}
+            type="button"
+            onClick={() => onOpen(trace.id)}
+            style={{
+              width: '100%',
+              textAlign: 'left',
+              border: 'none',
+              borderTop: '1px solid #1e2535',
+              background: selectedId === trace.id ? '#191d2b' : 'transparent',
+              color: 'inherit',
+              padding: '10px 2px',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            <div style={{ fontSize: 11 }}>
+              <span style={{ color: trace.decision === 'surfaced' || trace.decision === 'surfaced_override' ? '#4ade80' : (String(trace.decision || '').includes('reject') ? '#f87171' : '#fbbf24') }}>{trace.decision}</span>
+              {' · '}{trace.title || 'candidate signal'}
+            </div>
+            <div style={{ ...mono, color: '#64748b', fontSize: 9, marginTop: 3 }}>
+              {trace.trace_key || trace.id} · {trace.source} · {new Date(trace.created_at).toLocaleString()}
+            </div>
+          </button>
+        )) : <p style={{ color: '#64748b', fontSize: 12 }}>No recorded traces yet.</p>}
+      </div>
+      <div style={card}>
+        {error && <div style={{ color: '#f87171', fontSize: 12, marginBottom: 8 }}>{error}</div>}
+        {loading && <div style={{ color: '#64748b', fontSize: 12 }}>Loading trace…</div>}
+        {!loading && detail ? (
+          <TraceDetail detail={detail} onOverride={onOverride} onRefresh={onOpen} />
+        ) : !loading && (
+          <div style={{ color: '#64748b', fontSize: 12, padding: 8 }}>
+            Select a trace to inspect the original content, why Spill rejected/suppressed it, and optionally override it onto the dashboard.
+          </div>
+        )}
+      </div>
+    </section>
+  )
 }
 
 function AgentConfigPanel({ configs, versions, saving, onSave }) {

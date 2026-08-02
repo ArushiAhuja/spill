@@ -172,10 +172,18 @@ export const api = {
     const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))).toString()
     return request('GET', `/internal/observability/traces${qs ? `?${qs}` : ''}`)
   },
+  overrideObservabilityTrace: (trace_id, note = '') => request('POST', '/internal/observability/traces', { action: 'override', trace_id, note }),
   getObservabilityOperators: () => request('GET', '/internal/observability/operators'),
   setObservabilityOperator: (email, granted, org_id = null) => request('POST', '/internal/observability/operators', { email, granted, org_id }),
   createObservabilityWorkspace: (body) => request('POST', '/internal/observability/workspaces', body),
-  deleteObservabilityWorkspace: (org_id, confirmation) => request('DELETE', '/internal/observability/workspaces', { org_id, confirmation }),
+  // Prefer query params: some browsers/CDNs strip JSON bodies on DELETE.
+  deleteObservabilityWorkspace: (org_id, confirmation) => {
+    const qs = new URLSearchParams({
+      org_id: String(org_id || ''),
+      confirmation: String(confirmation || ''),
+    }).toString()
+    return request('DELETE', `/internal/observability/workspaces?${qs}`)
+  },
   getObservabilityOrg: (id) => request('GET', `/internal/observability/organizations/${id}`),
   saveObservabilityPrompt: (id, body) => request('PUT', `/internal/observability/organizations/${id}`, body),
   rollbackObservabilityPrompt: (id, prompt_key, target_version) => request('PUT', `/internal/observability/organizations/${id}`, { prompt_key, target_version, action: 'rollback' }),

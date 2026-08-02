@@ -15,7 +15,16 @@ export async function createEventTrace({ orgId, post, quality, decision, decisio
   const { rows: [trace] } = await query(
     `INSERT INTO ai_traces (org_id, source, status, decision, quality, decision_evidence, metadata, trace_key)
      VALUES ($1,$2,'completed',$3,$4,$5,$6,'spill_trace_' || replace(gen_random_uuid()::text,'-','')) RETURNING id,trace_key,event_id`,
-    [orgId, post.source || null, decision, JSON.stringify(quality), JSON.stringify(decisionEvidence), JSON.stringify({ external_id: post.id, title: post.title || '', detected_query: post.detected_query || null, prompt_versions: promptVersions })]
+    [orgId, post.source || null, decision, JSON.stringify(quality), JSON.stringify(decisionEvidence), JSON.stringify({
+      external_id: post.id,
+      title: post.title || '',
+      body: post.body || '',
+      url: post.url || null,
+      author: post.author || null,
+      engagement: post.score || 0,
+      detected_query: post.detected_query || null,
+      prompt_versions: promptVersions,
+    })]
   );
   const base = [{
     name: 'Source Processing Agent', kind: 'agent', model: sourceObservation?.model || null,

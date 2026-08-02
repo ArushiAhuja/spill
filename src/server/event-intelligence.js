@@ -139,10 +139,19 @@ export async function explainTrace({ trace, observations }) {
   const evidence = trace.decision_evidence || {};
   const decision = trace.decision || quality?.output?.decision || 'unknown';
   const lines = [];
+  if (decision === 'rejected_irrelevant') {
+    lines.push('Rejected as irrelevant to the organisation.');
+  } else if (String(decision).startsWith('suppressed')) {
+    lines.push('Suppressed by the signal-quality gate.');
+  } else if (decision === 'surfaced_override') {
+    lines.push('Operator override forced this candidate onto the dashboard.');
+  }
   if (relevance) lines.push(`Relevance: ${relevance.output?.is_relevant === false ? 'excluded' : 'accepted'} via ${relevance.input?.tier || 'recorded policy'}.`);
   if (category?.output?.category) lines.push(`Category: ${category.output.category}${category.output.confidence != null ? ` (${Math.round(Number(category.output.confidence) * 100)}% confidence)` : ''}.`);
   if (severity?.output?.escalation_score != null) lines.push(`Escalation score: ${severity.output.escalation_score}${severity.output.escalated ? ' (escalated)' : ''}.`);
   if (quality?.output?.score != null) lines.push(`Signal quality: ${quality.output.score}/${quality.input?.threshold ?? 0} threshold.`);
+  if (evidence?.category?.reasoning) lines.push(`Reasoning: ${evidence.category.reasoning}`);
+  if (evidence?.override?.previous_decision) lines.push(`Previously ${evidence.override.previous_decision}; overridden by operator.`);
   if (!lines.length) lines.push('The trace has no agent observations yet; inspect the stored source and decision metadata.');
   const [correctness, improvementsResult] = await Promise.all([
     getEventAssessmentSummary({ orgId: trace.org_id, eventId: trace.event_id }),

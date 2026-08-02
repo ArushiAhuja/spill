@@ -4,6 +4,9 @@ import { isSuperAdmin } from '../../../../../server/super-admin.js';
 import { ensureMigrations } from '../../../../../server/migrate.js';
 import { query } from '../../../../../server/db.js';
 
+// Cascade deletes can touch many child rows on large workspaces.
+export const maxDuration = 300;
+
 async function requireSuperAdmin(request) {
   await ensureMigrations();
   const user = getUser(request);
@@ -12,12 +15,20 @@ async function requireSuperAdmin(request) {
   return { user };
 }
 
+async function readJsonBody(request) {
+  try {
+    return await request.json();
+  } catch {
+    return {};
+  }
+}
+
 // POST /api/internal/observability/workspaces — create a workspace as Spill super admin.
 export async function POST(request) {
   try {
     const auth = await requireSuperAdmin(request);
     if (auth.error) return auth.error;
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const slug = typeof body.slug === 'string' ? body.slug.trim().toLowerCase() : '';
     const ownerEmail = typeof body.owner_email === 'string' ? body.owner_email.trim().toLowerCase() : '';
@@ -32,6 +43,9 @@ export async function POST(request) {
       const { rows } = await query('SELECT id, email, name FROM users WHERE lower(email)=$1', [ownerEmail]);
       owner = rows[0];
       if (!owner) return NextResponse.json({ error: 'owner must sign up to Spill before a workspace can be assigned' }, { status: 404 });
+    }
+    if (!owner?.id) {
+      return NextResponse.json({ error: 'authenticated owner id is missing from session' }, { status: 400 });
     }
 
     let organization;
@@ -51,17 +65,35 @@ export async function POST(request) {
   } catch (err) { return NextResponse.json({ error: err.message }, { status: 500 }); }
 }
 
+function parseDeletePayload(request) {
+  const url = new URL(request.url);
+  const fromQuery = {
+    org_id: url.searchParams.get('org_id') || '',
+    confirmation: url.searchParams.get('confirmation') || '',
+  };
+  return async () => {
+    const body = await readJsonBody(request);
+    return {
+      org_id: (typeof body.org_id === 'string' && body.org_id) || fromQuery.org_id || '',
+      confirmation: typeof body.confirmation === 'string' ? body.confirmation : fromQuery.confirmation,
+    };
+  };
+}
+
 // DELETE /api/internal/observability/workspaces — permanently remove a workspace and its data.
+// Accepts JSON body and/or query params (query params survive proxies that strip DELETE bodies).
 export async function DELETE(request) {
   try {
     const auth = await requireSuperAdmin(request);
     if (auth.error) return auth.error;
-    const { org_id, confirmation } = await request.json();
+    const { org_id, confirmation } = await parseDeletePayload(request)();
     if (!org_id) return NextResponse.json({ error: 'org_id is required' }, { status: 400 });
     const { rows } = await query('SELECT id, name, slug FROM organizations WHERE id=$1', [org_id]);
     const organization = rows[0];
     if (!organization) return NextResponse.json({ error: 'workspace not found' }, { status: 404 });
-    if (confirmation !== organization.name) {
+    const expected = String(organization.name || '').trim();
+    const provided = String(confirmation || '').trim();
+    if (!provided || provided !== expected) {
       return NextResponse.json({ error: `type the exact workspace name to delete: ${organization.name}` }, { status: 400 });
     }
     await query('DELETE FROM organizations WHERE id=$1', [organization.id]);
