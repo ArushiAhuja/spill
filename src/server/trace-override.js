@@ -1,6 +1,6 @@
 import { query } from './db.js';
 import { linkTraceToPost, recordTraceObservation } from './observability.js';
-import { syncFeedbackAssessment, syncImprovementRecommendation } from './event-intelligence.js';
+import { orchestrateOverrideLearning } from './feedback.js';
 
 export function extractCandidateFromTrace(trace, observations = []) {
   const meta = trace?.metadata || {};
@@ -256,47 +256,34 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
     },
   });
 
-  // Treat override as labelled feedback that the original reject/suppress was wrong.
+  // Immediate learning orchestration: reviewed examples for relevance/quality,
+  // evaluation cases, assessments/recommendations, and forced intel recompile.
+  let learning = null;
   try {
-    const eventId = trace.event_id || postId;
-    const { rows: [feedback] } = await query(
-      `INSERT INTO post_feedback (org_id, post_id, label, explanation, trace_id, event_id, agent_name, created_by, signal_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'explicit')
-       RETURNING id`,
-      [
-        trace.org_id,
-        postId,
-        previousDecision === 'rejected_irrelevant' ? 'missed_context' : 'useful',
-        overrideNote || 'Operator overrode rejected/suppressed candidate onto dashboard',
-        trace.id,
-        eventId,
-        previousDecision === 'rejected_irrelevant' ? 'relevance' : 'severity',
-        user?.email || user?.id || 'internal-operator',
-      ]
+    const { rows: [postRow] } = await query(
+      `SELECT id, title, body, source, category_id, escalation_score, escalated, ai_trace_id
+       FROM posts WHERE id=$1 AND org_id=$2`,
+      [postId, trace.org_id]
     );
-    if (feedback?.id) {
-      await syncFeedbackAssessment({
-        orgId: trace.org_id,
-        eventId,
-        traceId: trace.id,
-        postId,
-        feedbackId: feedback.id,
-        agentName: previousDecision === 'rejected_irrelevant' ? 'relevance' : 'severity',
-        label: previousDecision === 'rejected_irrelevant' ? 'not_relevant' : 'false_positive',
-        reason: overrideNote || 'Operator override surfaced a previously rejected/suppressed candidate',
-      });
-      await syncImprovementRecommendation({
-        orgId: trace.org_id,
-        feedbackId: feedback.id,
-        eventId,
-        agentName: previousDecision === 'rejected_irrelevant' ? 'relevance' : 'severity',
-        label: previousDecision === 'rejected_irrelevant' ? 'not_relevant' : 'false_positive',
-        reason: overrideNote || null,
-      });
-    }
+    learning = await orchestrateOverrideLearning({
+      orgId: trace.org_id,
+      post: postRow || {
+        id: postId,
+        title: candidate.title,
+        body: candidate.body,
+        source: candidate.source,
+        category_id: trace.decision_evidence?.category?.id || null,
+        ai_trace_id: trace.id,
+      },
+      traceId: trace.id,
+      eventId: trace.event_id || postId,
+      previousDecision,
+      note: overrideNote,
+      authorEmail: user?.email || null,
+    });
   } catch (err) {
-    // Feedback tables can vary by migration state; override itself must still succeed.
-    console.warn('[overrideTraceToDashboard] feedback sync skipped:', err.message);
+    console.warn('[overrideTraceToDashboard] learning orchestration skipped:', err.message);
+    learning = { error: err.message };
   }
 
   return {
@@ -309,5 +296,6 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
     previous_decision: previousDecision,
     dashboard_path: `/${trace.org_slug}`,
     candidate,
+    learning,
   };
 }

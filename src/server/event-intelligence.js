@@ -8,6 +8,11 @@ function compact(value, max = 1000) {
 
 function assessmentDefinitions(label, agentName) {
   const reason = `Customer feedback: ${String(label || 'unlabelled').replace(/_/g, ' ')}`;
+  if (label === 'should_have_surfaced') return [
+    { agentName: 'relevance', scope: 'agent_output', verdict: 'incorrect', reason },
+    { agentName: 'severity', scope: 'agent_output', verdict: 'incorrect', reason },
+    { agentName: 'surface_decision', scope: 'surface_decision', verdict: 'incorrect', reason },
+  ];
   if (NEGATIVE_RELEVANCE.has(label)) return [
     { agentName: 'relevance', scope: 'agent_output', verdict: 'incorrect', reason },
     { agentName: 'surface_decision', scope: 'surface_decision', verdict: 'incorrect', reason },
@@ -30,6 +35,10 @@ function assessmentDefinitions(label, agentName) {
 }
 
 function recommendationFor(label, agentName) {
+  if (label === 'should_have_surfaced') return {
+    agentName: agentName || 'relevance', key: 'expand_inclusion_boundary', priority: 'high',
+    text: 'Expand inclusion using the operator-overridden example: similar organisation-specific complaints should pass relevance and quality gates instead of being rejected or suppressed.',
+  };
   if (NEGATIVE_RELEVANCE.has(label)) return {
     agentName: 'relevance', key: 'tighten_relevance', priority: 'high',
     text: 'Tighten the organisation relevance boundary with the reviewed exclusions and examples; require a direct company or approved operational-intelligence connection before surfacing.',

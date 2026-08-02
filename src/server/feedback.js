@@ -11,7 +11,7 @@ function getOpenAI() {
 }
 
 const NEGATIVE_LABELS = new Set(['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'dismissed', 'false_positive']);
-const POSITIVE_LABELS = new Set(['useful', 'high_signal', 'missed_category', 'wrong_category', 'missed_context', 'saved', 'good_match']);
+const POSITIVE_LABELS = new Set(['useful', 'high_signal', 'missed_category', 'wrong_category', 'missed_context', 'saved', 'good_match', 'should_have_surfaced']);
 
 // Strip common PII patterns before including post content in training data or prompts.
 // Targets: email addresses, phone numbers, bare URLs.
@@ -38,11 +38,81 @@ async function recordLearningAction({ orgId, feedbackId = null, eventId, agentNa
 
 function expectedFromFeedback({ label, categoryId, newValue, severityDirection }) {
   const isRelevant = !NEGATIVE_LABELS.has(label);
+  const severity = label === 'wrong_severity'
+    ? (severityDirection || null)
+    : (label === 'should_have_surfaced' || label === 'missed_context' ? (severityDirection || 'higher') : null);
   return {
     relevant: isRelevant,
+    should_surface: label === 'should_have_surfaced' ? true : (isRelevant && !['false_positive'].includes(label)),
     category_id: ['wrong_category', 'missed_category'].includes(label) ? (newValue || null) : (categoryId || null),
-    severity_direction: label === 'wrong_severity' ? (severityDirection || null) : null,
+    severity_direction: severity,
   };
+}
+
+export function agentsForFeedbackLabel(label, { previousDecision = null } = {}) {
+  if (label === 'should_have_surfaced') {
+    return previousDecision === 'rejected_irrelevant' ? ['relevance', 'severity'] : ['severity', 'relevance'];
+  }
+  if (['wrong_category', 'missed_category'].includes(label)) return ['category'];
+  if (['wrong_severity', 'missed_context', 'false_positive'].includes(label)) return ['severity', 'relevance'];
+  if (NEGATIVE_LABELS.has(label)) return ['relevance'];
+  if (POSITIVE_LABELS.has(label)) return ['relevance', 'severity'];
+  return ['relevance'];
+}
+
+export function evaluationBucketForLabel(label) {
+  if (NEGATIVE_LABELS.has(label)) return 'bad_signal';
+  if (label === 'missed_context' || label === 'wrong_severity' || label === 'should_have_surfaced') return 'borderline';
+  return 'good_signal';
+}
+
+async function createEvaluationCasesForFeedback({
+  orgId,
+  postId,
+  feedbackId = null,
+  eventId = null,
+  agents,
+  input,
+  expected,
+  bucket,
+  notes = null,
+  createdBy = null,
+}) {
+  const created = [];
+  for (const agentName of agents) {
+    try {
+      const { rows: [row] } = await query(
+        `INSERT INTO agent_evaluation_cases (org_id,post_id,agent_name,input,expected_output,bucket,notes,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id, agent_name`,
+        [
+          orgId,
+          postId,
+          agentName,
+          JSON.stringify(input),
+          JSON.stringify(expected),
+          bucket,
+          notes,
+          createdBy,
+        ]
+      );
+      if (row) created.push(row);
+      if (feedbackId && eventId) {
+        await recordLearningAction({
+          orgId,
+          feedbackId,
+          eventId,
+          agentName,
+          actionType: 'evaluation_case',
+          after: { case_id: row?.id || null, bucket, expected },
+          reason: notes,
+        });
+      }
+    } catch (err) {
+      console.warn('[feedback] evaluation case skipped:', err.message);
+    }
+  }
+  return created;
 }
 
 // Feedback can be incorporated immediately as a reviewed, organisation-scoped
@@ -108,7 +178,11 @@ async function applyThresholdLearning({ orgId, feedbackId, eventId, agentName, e
   const { rows: [counts] } = await query(
     `SELECT
        COUNT(*) FILTER (WHERE label='false_positive' OR (label='wrong_severity' AND severity_direction='lower'))::int AS over_count,
-       COUNT(*) FILTER (WHERE label='missed_context' OR (label='wrong_severity' AND severity_direction='higher'))::int AS under_count
+       COUNT(*) FILTER (
+         WHERE label='missed_context'
+            OR label='should_have_surfaced'
+            OR (label='wrong_severity' AND severity_direction='higher')
+       )::int AS under_count
      FROM post_feedback
      WHERE org_id=$1 AND created_at > NOW()-INTERVAL '60 days'`,
     [orgId]
@@ -172,6 +246,151 @@ export async function applyFeedbackLearning({ orgId, feedbackId, eventId, agentN
     } catch {}
   }
   return result;
+}
+
+// Shared orchestration for labelled feedback: evaluation cases + immediate
+// reviewed examples + assessments/recommendations across the agents that own
+// the correction. Optionally force an intelligence recompile.
+export async function orchestrateFeedbackLearning({
+  orgId,
+  feedbackId,
+  eventId,
+  post,
+  label,
+  explanation = null,
+  newValue = null,
+  severityDirection = null,
+  authorEmail = null,
+  agents = null,
+  previousDecision = null,
+  forceIntel = false,
+  evalInputExtra = null,
+}) {
+  const agentList = agents || agentsForFeedbackLabel(label, { previousDecision });
+  const expected = {
+    ...expectedFromFeedback({
+      label,
+      categoryId: post.category_id,
+      newValue,
+      severityDirection,
+    }),
+    previous_decision: previousDecision || null,
+  };
+  const evalInput = {
+    title: compactText(post.title, 300),
+    body: compactText(post.body, 700),
+    source: post.source || null,
+    ...(evalInputExtra && typeof evalInputExtra === 'object' ? evalInputExtra : {}),
+  };
+  const bucket = label === 'should_have_surfaced' ? 'good_signal' : evaluationBucketForLabel(label);
+
+  const evaluationCases = await createEvaluationCasesForFeedback({
+    orgId,
+    postId: post.id,
+    feedbackId,
+    eventId,
+    agents: agentList,
+    input: evalInput,
+    expected,
+    bucket,
+    notes: compactText(explanation, 1000) || null,
+    createdBy: authorEmail || 'spill-feedback-learning',
+  });
+
+  const learningByAgent = {};
+  for (const agentName of agentList) {
+    learningByAgent[agentName] = await applyFeedbackLearning({
+      orgId,
+      feedbackId,
+      eventId,
+      agentName,
+      post,
+      label,
+      explanation,
+      newValue,
+      severityDirection,
+      authorEmail,
+    });
+  }
+
+  if (forceIntel) {
+    await updateOrgIntelligence(orgId, { force: true }).catch((err) => {
+      console.warn('[feedback] intelligence compile skipped:', err.message);
+    });
+  }
+
+  return {
+    feedback_id: feedbackId,
+    label,
+    agents: agentList,
+    evaluation_cases: evaluationCases,
+    learning_by_agent: learningByAgent,
+  };
+}
+
+// Operator overrides are a strong supervised signal: Spill wrongly rejected or
+// suppressed a candidate that should appear on the dashboard. This orchestrates
+// immediate learning for the relevant agents, evaluation-case creation, and a
+// forced intelligence recompile so the next refresh can use the correction.
+export async function orchestrateOverrideLearning({
+  orgId,
+  post,
+  traceId = null,
+  eventId = null,
+  previousDecision = null,
+  note = '',
+  authorEmail = null,
+}) {
+  const explanation = compactText(
+    note || `Operator override: previously ${previousDecision || 'rejected/suppressed'}; forced onto dashboard.`,
+    1000
+  );
+  const stableEventId = eventId || post?.id;
+  const label = 'should_have_surfaced';
+  const agents = agentsForFeedbackLabel(label, { previousDecision });
+  const resultingAdjustment = previousDecision === 'rejected_irrelevant'
+    ? 'override surfaced rejected candidate; relevance/quality examples updated immediately'
+    : 'override surfaced suppressed candidate; quality/relevance examples updated immediately';
+
+  const { rows: [feedback] } = await query(
+    `INSERT INTO post_feedback (
+       org_id, post_id, event_id, label, explanation, resulting_adjustment,
+       agent_name, trace_id, created_by, signal_type
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'explicit')
+     RETURNING *`,
+    [
+      orgId,
+      post.id,
+      stableEventId,
+      label,
+      explanation,
+      resultingAdjustment,
+      agents[0],
+      traceId || post.ai_trace_id || null,
+      authorEmail || 'internal-operator',
+    ]
+  );
+
+  const learning = await orchestrateFeedbackLearning({
+    orgId,
+    feedbackId: feedback.id,
+    eventId: stableEventId,
+    post: { ...post, ai_trace_id: traceId || post.ai_trace_id || null },
+    label,
+    explanation,
+    severityDirection: 'higher',
+    authorEmail: authorEmail || 'internal-operator',
+    agents,
+    previousDecision,
+    forceIntel: true,
+    evalInputExtra: { override_note: explanation },
+  });
+
+  return {
+    ...learning,
+    explanation,
+    resulting_adjustment: resultingAdjustment,
+  };
 }
 
 // Returns a concise, deduplicated context string (~200 tokens) for injection into
@@ -333,7 +552,9 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
       (r.label === 'wrong_severity' && r.severity_direction === 'higher')
     );
     const falsePositiveRows = feedbackResult.rows.filter(r => r.label === 'false_positive');
-    const missedContextRows = feedbackResult.rows.filter(r => r.label === 'missed_context');
+    const missedContextRows = feedbackResult.rows.filter(r =>
+      r.label === 'missed_context' || r.label === 'should_have_surfaced'
+    );
 
     if (!negativeRows.length && !positiveRows.length && !savedResult.rows.length) return;
 
@@ -349,7 +570,10 @@ export async function updateOrgIntelligence(orgId, { force = false } = {}) {
     const positiveFeedback = [
       ...positiveRows.slice(0, 15).map(r => {
         const text = anonymizeText(r.explanation || r.title || '');
-        const prefix = r.label === 'missed_context' ? '[missed context] ' : r.label === 'wrong_severity' ? '[under-escalated] ' : '';
+        const prefix = r.label === 'should_have_surfaced' ? '[should have surfaced] '
+          : r.label === 'missed_context' ? '[missed context] '
+            : r.label === 'wrong_severity' ? '[under-escalated] '
+              : '';
         return prefix + text;
       }),
       ...savedResult.rows.slice(0, 15).map(r => [r.category_name, r.title?.slice(0, 80)].filter(Boolean).join(' — ')),
@@ -499,6 +723,132 @@ Rules:
   } catch (err) {
     console.warn('[feedback] intelligence update failed:', err.message);
   }
+}
+
+// Replays historical labelled feedback through the same immediate learning path
+// used by new submissions: reviewed examples, evaluation cases, assessments,
+// and one forced intelligence recompile per organisation.
+export async function backfillFeedbackLearning({ orgId = null, limit = null, skipLearned = true } = {}) {
+  const params = [];
+  const filters = ['f.label IS NOT NULL'];
+  if (orgId) {
+    params.push(orgId);
+    filters.push(`f.org_id = $${params.length}`);
+  }
+  let limitSql = '';
+  if (limit) {
+    params.push(limit);
+    limitSql = `LIMIT $${params.length}`;
+  }
+
+  const { rows } = await query(
+    `SELECT
+       f.id AS feedback_id,
+       f.org_id,
+       f.post_id,
+       f.event_id,
+       f.label,
+       f.explanation,
+       f.new_value,
+       f.severity_direction,
+       f.created_by,
+       f.agent_name,
+       p.id AS resolved_post_id,
+       p.title,
+       p.body,
+       p.source,
+       p.category_id,
+       p.escalation_score,
+       p.escalated,
+       p.ai_trace_id
+     FROM post_feedback f
+     LEFT JOIN posts p ON p.id = f.post_id AND p.org_id = f.org_id
+     WHERE ${filters.join(' AND ')}
+     ORDER BY f.org_id ASC, f.created_at ASC
+     ${limitSql}`,
+    params
+  );
+
+  const summary = {
+    scanned: rows.length,
+    processed: 0,
+    skipped_learned: 0,
+    skipped_no_post: 0,
+    failed: 0,
+    orgs: {},
+  };
+
+  const touchedOrgs = new Set();
+
+  for (const row of rows) {
+    const orgBucket = summary.orgs[row.org_id] || (summary.orgs[row.org_id] = {
+      processed: 0, skipped_learned: 0, skipped_no_post: 0, failed: 0,
+    });
+
+    if (!row.resolved_post_id) {
+      summary.skipped_no_post += 1;
+      orgBucket.skipped_no_post += 1;
+      continue;
+    }
+
+    if (skipLearned) {
+      const { rows: existing } = await query(
+        `SELECT 1 FROM feedback_learning_actions
+         WHERE feedback_id = $1 AND action_type = 'example_update' AND status = 'applied'
+         LIMIT 1`,
+        [row.feedback_id]
+      );
+      if (existing.length) {
+        summary.skipped_learned += 1;
+        orgBucket.skipped_learned += 1;
+        continue;
+      }
+    }
+
+    const post = {
+      id: row.resolved_post_id,
+      title: row.title,
+      body: row.body,
+      source: row.source,
+      category_id: row.category_id,
+      escalation_score: row.escalation_score,
+      escalated: row.escalated,
+      ai_trace_id: row.ai_trace_id,
+    };
+    const eventId = row.event_id || row.resolved_post_id;
+
+    try {
+      await orchestrateFeedbackLearning({
+        orgId: row.org_id,
+        feedbackId: row.feedback_id,
+        eventId,
+        post,
+        label: row.label,
+        explanation: row.explanation,
+        newValue: row.new_value,
+        severityDirection: row.severity_direction,
+        authorEmail: row.created_by || 'feedback-backfill',
+        agents: agentsForFeedbackLabel(row.label),
+        forceIntel: false,
+      });
+      summary.processed += 1;
+      orgBucket.processed += 1;
+      touchedOrgs.add(row.org_id);
+    } catch (err) {
+      console.warn(`[feedback-backfill] feedback ${row.feedback_id} failed:`, err.message);
+      summary.failed += 1;
+      orgBucket.failed += 1;
+    }
+  }
+
+  for (const id of touchedOrgs) {
+    await updateOrgIntelligence(id, { force: true }).catch((err) => {
+      console.warn(`[feedback-backfill] intel compile failed for ${id}:`, err.message);
+    });
+  }
+
+  summary.orgs_recompiled = [...touchedOrgs];
+  return summary;
 }
 
 // Exports feedback + post content as OpenAI fine-tuning JSONL.

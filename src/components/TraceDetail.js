@@ -21,11 +21,28 @@ function decisionColor(decision) {
   return '#fbbf24'
 }
 
+function formatLearningSummary(learning) {
+  if (!learning) return ''
+  if (learning.error) return `Learning partially failed: ${learning.error}`
+  const agents = Array.isArray(learning.agents) ? learning.agents.join(', ') : 'relevance, severity'
+  const cases = Array.isArray(learning.evaluation_cases) ? learning.evaluation_cases.length : 0
+  const byAgent = learning.learning_by_agent || {}
+  const examples = Object.values(byAgent).filter((r) => r?.example_update).length
+  const parts = [
+    `Labelled should_have_surfaced for ${agents}.`,
+    examples ? `${examples} reviewed training example(s) written.` : 'Training example write attempted.',
+    cases ? `${cases} evaluation case(s) created.` : null,
+    'Intelligence profile recompile triggered.',
+  ].filter(Boolean)
+  return parts.join(' ')
+}
+
 export function TraceDetail({ detail, onOverride, onRefresh }) {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [learningSummary, setLearningSummary] = useState('')
 
   if (!detail?.trace) {
     return <div style={{ color: '#64748b', fontSize: 13, padding: 12 }}>Trace detail unavailable.</div>
@@ -50,9 +67,11 @@ export function TraceDetail({ detail, onOverride, onRefresh }) {
     setBusy(true)
     setError('')
     setMessage('')
+    setLearningSummary('')
     try {
       const result = await onOverride({ traceId: t.id, note })
       setMessage(`Surfaced on ${result.org_name || 'dashboard'}. Open /${result.org_slug || ''} to verify.`)
+      setLearningSummary(formatLearningSummary(result.learning))
       setNote('')
       if (onRefresh) await onRefresh(t.id)
     } catch (e) {
@@ -146,6 +165,12 @@ export function TraceDetail({ detail, onOverride, onRefresh }) {
           )}
           {message && <div style={{ marginTop: 8, color: '#4ade80', fontSize: 12 }}>{message}</div>}
           {error && <div style={{ marginTop: 8, color: '#f87171', fontSize: 12 }}>{error}</div>}
+          {learningSummary && (
+            <div style={{ marginTop: 8, padding: 8, background: '#0d0f1a', borderRadius: 6, fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>
+              <div style={{ ...mono, color: '#93c5fd', fontSize: 9, marginBottom: 4 }}>LEARNING APPLIED</div>
+              {learningSummary}
+            </div>
+          )}
         </div>
       )}
 

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { query } from '../../../../../../../server/db.js';
 import { getUser, getOrgAccess } from '../../../../../../../server/api-auth.js';
 import { ensureMigrations } from '../../../../../../../server/migrate.js';
-import { applyFeedbackLearning, updateOrgIntelligence } from '../../../../../../../server/feedback.js';
+import { updateOrgIntelligence, orchestrateFeedbackLearning, agentsForFeedbackLabel } from '../../../../../../../server/feedback.js';
 
 const VALID_LABELS = new Set([
   // Exclusion signals
@@ -11,6 +11,7 @@ const VALID_LABELS = new Set([
   'wrong_category', 'missed_category', 'wrong_severity', 'false_positive', 'missed_context',
   // Positive signals
   'useful', 'high_signal',
+  'should_have_surfaced',
 ]);
 
 const NEGATIVE_LABELS = new Set(['not_relevant', 'wrong_geography', 'unrelated_complaint', 'too_generic', 'duplicate', 'false_positive']);
@@ -134,7 +135,7 @@ export async function POST(request, { params }) {
       resultingAdjustment = `de-escalated and dismissed; false positive pattern recorded`;
     }
 
-    if (label === 'missed_context') {
+    if (label === 'missed_context' || label === 'should_have_surfaced') {
       // If the post wasn't escalated, bump it up so the team sees it
       const threshold = parseInt(process.env.ESCALATE_THRESHOLD) || 60;
       if (!post.escalated) {
@@ -143,9 +144,13 @@ export async function POST(request, { params }) {
           'UPDATE posts SET escalation_score = $1, escalated = $2 WHERE id = $3 AND org_id = $4',
           [newScore, newScore >= threshold, id, access.orgId]
         );
-        resultingAdjustment = `escalation score raised: ${post.escalation_score} → ${newScore}; context added to intelligence`;
+        resultingAdjustment = label === 'should_have_surfaced'
+          ? `should-have-surfaced recorded; escalation score raised: ${post.escalation_score} → ${newScore}`
+          : `escalation score raised: ${post.escalation_score} → ${newScore}; context added to intelligence`;
       } else {
-        resultingAdjustment = 'context pattern added to intelligence profile';
+        resultingAdjustment = label === 'should_have_surfaced'
+          ? 'should-have-surfaced pattern recorded for relevance/quality agents'
+          : 'context pattern added to intelligence profile';
       }
     }
 
@@ -192,6 +197,7 @@ export async function POST(request, { params }) {
       const adjustments = {
         useful:        'boost pattern recorded; similar posts will be prioritized',
         high_signal:   'high-signal pattern recorded; similar posts may be escalated',
+        should_have_surfaced: 'should-have-surfaced recorded; relevance/quality examples updated',
         not_relevant:  'post dismissed; exclusion pattern recorded',
         duplicate:     'post dismissed as duplicate',
         too_generic:   'post dismissed; generic pattern excluded from future cycles',
@@ -200,7 +206,7 @@ export async function POST(request, { params }) {
     }
 
     const agentName = ['wrong_category', 'missed_category'].includes(label) ? 'category'
-      : ['wrong_severity', 'missed_context'].includes(label) ? 'severity' : 'relevance';
+      : ['wrong_severity', 'missed_context', 'should_have_surfaced', 'false_positive'].includes(label) ? 'severity' : 'relevance';
     const { rows: [feedback] } = await query(
       `INSERT INTO post_feedback (org_id, post_id, event_id, label, explanation, field, old_value, new_value, severity_direction, resulting_adjustment, agent_name, trace_id, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -208,43 +214,34 @@ export async function POST(request, { params }) {
       [
         access.orgId, id, eventId, label || null, explanation || null,
         insertField, insertOldValue, insertNewValue,
-        severity_direction || null,
+        severity_direction || (label === 'should_have_surfaced' ? 'higher' : null),
         resultingAdjustment,
         agentName, post.ai_trace_id || null, user.email || null,
       ]
     );
 
-    // Feedback is immediately reusable as labelled ground truth for the
-    // organisation's evaluation suite. It never changes a prompt by itself.
-    const expected = {
-      relevant: !NEGATIVE_LABELS.has(label),
-      category_id: (label === 'wrong_category' || label === 'missed_category') ? (new_value || null) : post.category_id || null,
-      severity_direction: label === 'wrong_severity' ? (severity_direction || null) : null,
-    };
-    const bucket = NEGATIVE_LABELS.has(label) ? 'bad_signal' : label === 'missed_context' || label === 'wrong_severity' ? 'borderline' : 'good_signal';
-    await query(
-      `INSERT INTO agent_evaluation_cases (org_id,post_id,agent_name,input,expected_output,bucket,notes,created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [access.orgId, id, agentName, JSON.stringify({ title: post.title, body: post.body, source: post.source }), JSON.stringify(expected), bucket, explanation || null, user.email || null]
-    ).catch(() => {});
-
-    const learning = await applyFeedbackLearning({
+    // Multi-agent orchestration: evaluation cases + reviewed examples for every
+    // agent that owns this correction (not just the primary feedback agent).
+    const learning = await orchestrateFeedbackLearning({
       orgId: access.orgId,
       feedbackId: feedback.id,
       eventId,
-      agentName,
       post,
       label,
       explanation,
       newValue: insertNewValue,
-      severityDirection: severity_direction,
+      severityDirection: severity_direction || (label === 'should_have_surfaced' ? 'higher' : null),
       authorEmail: user.email || null,
+      agents: agentsForFeedbackLabel(label),
+      forceIntel: label === 'should_have_surfaced',
     });
 
     // The wider 60-day corpus is compiled into concise prompt terms and
     // category severity signals. It is debounced internally, so normal usage
     // does not cause one model call per click after the initial refresh.
-    await updateOrgIntelligence(access.orgId).catch(() => {});
+    if (label !== 'should_have_surfaced') {
+      await updateOrgIntelligence(access.orgId).catch(() => {});
+    }
 
     return NextResponse.json({ ok: true, event_id: eventId, resulting_adjustment: resultingAdjustment, learning });
   } catch (err) {
