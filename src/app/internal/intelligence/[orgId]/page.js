@@ -27,11 +27,45 @@ export default function OrgIntelligencePage({ params }) {
   const [traceDetail, setTraceDetail] = useState(null)
   const [traceError, setTraceError] = useState('')
   const [traceLoading, setTraceLoading] = useState(false)
+  const [traceList, setTraceList] = useState([])
+  const [tracePage, setTracePage] = useState(null)
+  const [traceTotals, setTraceTotals] = useState(null)
+  const [traceRange, setTraceRange] = useState('all')
+  const [traceDecision, setTraceDecision] = useState('all')
+  const [traceQuery, setTraceQuery] = useState('')
+  const [traceListLoading, setTraceListLoading] = useState(false)
+  const [traceListBusy, setTraceListBusy] = useState(false)
 
   function choose(prompt) {
     setSelected(prompt.prompt_key)
     setContent(prompt.content)
     setSummary('')
+  }
+
+  async function loadTraces({ append = false, before = null } = {}) {
+    if (append) setTraceListBusy(true)
+    else setTraceListLoading(true)
+    setTraceError('')
+    try {
+      const result = await api.getObservabilityTraces({
+        org_id: id,
+        range: traceRange,
+        decision: traceDecision === 'all' ? undefined : traceDecision,
+        q: traceQuery.trim() || undefined,
+        limit: 100,
+        before: before || undefined,
+      })
+      const next = result.traces || []
+      setTraceList((prev) => (append ? [...prev, ...next] : next))
+      setTracePage(result.page || null)
+      setTraceTotals(result.totals || null)
+    } catch (e) {
+      setTraceError(e.message)
+      if (!append) setTraceList([])
+    } finally {
+      setTraceListLoading(false)
+      setTraceListBusy(false)
+    }
   }
 
   async function load() {
@@ -42,6 +76,7 @@ export default function OrgIntelligencePage({ params }) {
   }
 
   useEffect(() => { load().catch(e => setPageError(e.message)) }, [id])
+  useEffect(() => { loadTraces().catch(() => {}) }, [id, traceRange, traceDecision])
 
   async function openTrace(traceId) {
     setTraceLoading(true)
@@ -164,11 +199,23 @@ export default function OrgIntelligencePage({ params }) {
     {error && <div style={{ ...card, marginBottom: 18, color: '#f87171', fontSize: 12 }}>{error}</div>}
 
     <RecentTraces
-      traces={data.recent_traces}
+      traces={traceList}
       selectedId={selectedTraceId}
       detail={traceDetail}
       loading={traceLoading}
+      listLoading={traceListLoading}
+      listBusy={traceListBusy}
       error={traceError}
+      range={traceRange}
+      decision={traceDecision}
+      query={traceQuery}
+      page={tracePage}
+      totals={traceTotals}
+      onRange={setTraceRange}
+      onDecision={setTraceDecision}
+      onQuery={setTraceQuery}
+      onSearch={() => loadTraces()}
+      onLoadOlder={() => loadTraces({ append: true, before: tracePage?.next_before })}
       onOpen={openTrace}
       onOverride={overrideTrace}
     />
@@ -222,37 +269,124 @@ export default function OrgIntelligencePage({ params }) {
   </main>
 }
 
-function RecentTraces({ traces, selectedId, detail, loading, error, onOpen, onOverride }) {
+function RecentTraces({
+  traces,
+  selectedId,
+  detail,
+  loading,
+  listLoading,
+  listBusy,
+  error,
+  range,
+  decision,
+  query,
+  page,
+  totals,
+  onRange,
+  onDecision,
+  onQuery,
+  onSearch,
+  onLoadOlder,
+  onOpen,
+  onOverride,
+}) {
+  const oldestShown = traces?.length ? traces[traces.length - 1]?.created_at : null
   return (
     <section style={{ display: 'grid', gridTemplateColumns: 'minmax(280px,1fr) minmax(320px,1.1fr)', gap: 12, marginBottom: 18, alignItems: 'start' }}>
       <div style={card}>
-        <div style={{ ...mono, fontSize: 10, color: '#94a3b8', marginBottom: 8 }}>RECENT TRACES</div>
-        {traces?.length ? traces.map(trace => (
-          <button
-            key={trace.id}
-            type="button"
-            onClick={() => onOpen(trace.id)}
-            style={{
-              width: '100%',
-              textAlign: 'left',
-              border: 'none',
-              borderTop: '1px solid #1e2535',
-              background: selectedId === trace.id ? '#191d2b' : 'transparent',
-              color: 'inherit',
-              padding: '10px 2px',
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }}
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline', marginBottom: 8 }}>
+          <div style={{ ...mono, fontSize: 10, color: '#94a3b8' }}>TRACE HISTORY</div>
+          <div style={{ ...mono, fontSize: 9, color: '#64748b' }}>
+            {totals?.total != null ? `${traces?.length || 0} shown · ${totals.total} total` : `${traces?.length || 0} shown`}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+          {['all', '7d', '30d', '24h', '6h'].map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => onRange(r)}
+              style={{
+                padding: '4px 8px',
+                borderRadius: 999,
+                border: range === r ? '1px solid #2563eb' : '1px solid #243047',
+                background: range === r ? '#1e3a8a' : 'transparent',
+                color: range === r ? '#dbeafe' : '#94a3b8',
+                cursor: 'pointer',
+                fontSize: 10,
+                fontFamily: 'inherit',
+              }}
+            >
+              {r === 'all' ? 'all time' : r}
+            </button>
+          ))}
+          <select
+            value={decision}
+            onChange={(e) => onDecision(e.target.value)}
+            style={{ background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: '4px 6px', fontSize: 10 }}
           >
-            <div style={{ fontSize: 11 }}>
-              <span style={{ color: trace.decision === 'surfaced' || trace.decision === 'surfaced_override' ? '#4ade80' : (String(trace.decision || '').includes('reject') ? '#f87171' : '#fbbf24') }}>{trace.decision}</span>
-              {' · '}{trace.title || 'candidate signal'}
-            </div>
-            <div style={{ ...mono, color: '#64748b', fontSize: 9, marginTop: 3 }}>
-              {trace.trace_key || trace.id} · {trace.source} · {new Date(trace.created_at).toLocaleString()}
-            </div>
+            <option value="all">all decisions</option>
+            <option value="rejected">rejected</option>
+            <option value="suppressed">suppressed</option>
+            <option value="surfaced">surfaced</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+          <input
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onSearch() }}
+            placeholder="Search title, source, decision…"
+            style={{ flex: 1, background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: '6px 8px', fontSize: 11 }}
+          />
+          <button type="button" onClick={onSearch} style={{ padding: '6px 10px', border: 0, borderRadius: 6, background: '#2563eb', color: 'white', cursor: 'pointer', fontSize: 11 }}>search</button>
+        </div>
+        {totals?.oldest && (
+          <div style={{ ...mono, fontSize: 9, color: '#475569', marginBottom: 8 }}>
+            oldest available {new Date(totals.oldest).toLocaleString()}
+            {oldestShown ? ` · oldest loaded ${new Date(oldestShown).toLocaleString()}` : ''}
+          </div>
+        )}
+        <div style={{ maxHeight: 520, overflow: 'auto' }}>
+          {listLoading ? (
+            <p style={{ color: '#64748b', fontSize: 12 }}>Loading history…</p>
+          ) : traces?.length ? traces.map(trace => (
+            <button
+              key={trace.id}
+              type="button"
+              onClick={() => onOpen(trace.id)}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                border: 'none',
+                borderTop: '1px solid #1e2535',
+                background: selectedId === trace.id ? '#191d2b' : 'transparent',
+                color: 'inherit',
+                padding: '10px 2px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
+            >
+              <div style={{ fontSize: 11 }}>
+                <span style={{ color: trace.decision === 'surfaced' || trace.decision === 'surfaced_override' ? '#4ade80' : (String(trace.decision || '').includes('reject') ? '#f87171' : '#fbbf24') }}>{trace.decision}</span>
+                {' · '}{trace.title || 'candidate signal'}
+              </div>
+              <div style={{ ...mono, color: '#64748b', fontSize: 9, marginTop: 3 }}>
+                {trace.trace_key || trace.id} · {trace.source} · {new Date(trace.created_at).toLocaleString()}
+              </div>
+            </button>
+          )) : <p style={{ color: '#64748b', fontSize: 12 }}>No recorded traces in this range.</p>}
+        </div>
+        {page?.has_more && (
+          <button
+            type="button"
+            disabled={listBusy}
+            onClick={onLoadOlder}
+            style={{ marginTop: 10, width: '100%', padding: '8px 10px', border: '1px solid #243047', borderRadius: 6, background: '#191d2b', color: '#93c5fd', cursor: 'pointer', fontSize: 11 }}
+          >
+            {listBusy ? 'loading older…' : 'load older traces'}
           </button>
-        )) : <p style={{ color: '#64748b', fontSize: 12 }}>No recorded traces yet.</p>}
+        )}
       </div>
       <div style={card}>
         {error && <div style={{ color: '#f87171', fontSize: 12, marginBottom: 8 }}>{error}</div>}

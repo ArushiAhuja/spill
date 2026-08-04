@@ -25,7 +25,8 @@ export async function GET(request, { params }) {
       query(`SELECT o.name,COALESCE(o.model,'deterministic') model,MAX(o.prompt_version) prompt_version,MAX(o.created_at) last_execution,COUNT(*)::int executions,COUNT(*) FILTER (WHERE o.error IS NULL)::int successful,COUNT(*) FILTER (WHERE o.error IS NOT NULL)::int failed FROM ai_observations o JOIN ai_traces t ON t.id=o.trace_id WHERE t.org_id=$1 GROUP BY o.name,o.model ORDER BY last_execution DESC`, [params.id]),
       query('SELECT id,name,description,severity,color FROM categories WHERE org_id=$1 ORDER BY severity DESC,name', [params.id]),
       query('SELECT source,enabled,config FROM source_configs WHERE org_id=$1 ORDER BY source', [params.id]),
-      query(`SELECT t.id,t.trace_key,t.decision,t.created_at,t.source,p.title,p.escalation_score FROM ai_traces t LEFT JOIN posts p ON p.id=t.post_id WHERE t.org_id=$1 ORDER BY t.created_at DESC LIMIT 20`, [params.id]),
+      // Initial slice only — the org page loads full history via /traces with pagination.
+      query(`SELECT t.id,t.trace_key,t.decision,t.created_at,t.source,p.title,p.escalation_score FROM ai_traces t LEFT JOIN posts p ON p.id=t.post_id WHERE t.org_id=$1 ORDER BY t.created_at DESC LIMIT 50`, [params.id]),
       query(`SELECT label,COUNT(*)::int count FROM post_feedback WHERE org_id=$1 AND created_at > NOW()-INTERVAL '60 days' GROUP BY label ORDER BY count DESC`, [params.id]),
       getOrganizationAgentConfigs(params.id),
     ]);

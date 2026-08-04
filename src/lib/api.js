@@ -169,7 +169,10 @@ export const api = {
   // Hidden Spill operator console — server verifies super-admin access on every call.
   getObservabilityOverview: () => request('GET', '/internal/observability/overview'),
   getObservabilityTraces: (params = {}) => {
-    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''))).toString()
+    const cleaned = Object.fromEntries(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    )
+    const qs = new URLSearchParams(cleaned).toString()
     return request('GET', `/internal/observability/traces${qs ? `?${qs}` : ''}`)
   },
   overrideObservabilityTrace: (trace_id, note = '') => request('POST', '/internal/observability/traces', { action: 'override', trace_id, note }),

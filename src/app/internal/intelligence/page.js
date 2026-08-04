@@ -11,6 +11,12 @@ const inputStyle = { background:'#0d0f1a', color:'#e2e8f0', border:'1px solid #2
 export default function IntelligenceConsole() {
   const [orgs, setOrgs] = useState([])
   const [traces, setTraces] = useState([])
+  const [tracePage, setTracePage] = useState(null)
+  const [traceTotals, setTraceTotals] = useState(null)
+  const [traceRange, setTraceRange] = useState('all')
+  const [traceOrgId, setTraceOrgId] = useState('')
+  const [traceListLoading, setTraceListLoading] = useState(false)
+  const [traceListBusy, setTraceListBusy] = useState(false)
   const [selected, setSelected] = useState(null)
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState('')
@@ -38,14 +44,39 @@ export default function IntelligenceConsole() {
     return api.getObservabilityOverview().then(d => setOrgs(d.organizations || []))
   }
 
-  useEffect(() => {
-    Promise.all([api.getObservabilityOverview(), api.getObservabilityTraces(), loadOperators()])
-      .then(([a, b]) => {
-        setOrgs(a.organizations || [])
-        setTraces(b.traces || [])
+  async function loadTraces({ append = false, before = null } = {}) {
+    if (append) setTraceListBusy(true)
+    else setTraceListLoading(true)
+    setTraceError('')
+    try {
+      const result = await api.getObservabilityTraces({
+        org_id: traceOrgId || undefined,
+        range: traceRange,
+        limit: 100,
+        before: before || undefined,
       })
+      const next = result.traces || []
+      setTraces((prev) => (append ? [...prev, ...next] : next))
+      setTracePage(result.page || null)
+      setTraceTotals(result.totals || null)
+    } catch (e) {
+      setTraceError(e.message)
+      if (!append) setTraces([])
+    } finally {
+      setTraceListLoading(false)
+      setTraceListBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    Promise.all([api.getObservabilityOverview(), loadOperators()])
+      .then(([a]) => setOrgs(a.organizations || []))
       .catch(e => setError(e.message))
   }, [])
+
+  useEffect(() => {
+    loadTraces().catch(() => {})
+  }, [traceRange, traceOrgId])
 
   async function openTrace(id) {
     setTraceError('')
@@ -213,19 +244,69 @@ export default function IntelligenceConsole() {
 
       <section style={{ display:'grid', gridTemplateColumns:'minmax(330px,1fr) minmax(360px,1.1fr)', gap:16, alignItems:'start' }}>
         <div style={card}>
-          <div style={{ ...mono, color:'#94a3b8', fontSize:11, letterSpacing:'.1em', marginBottom:12 }}>EVENT TRACE EXPLORER</div>
-          {traces.length ? traces.map(t => (
-            <button key={t.id} onClick={() => openTrace(t.id)} style={{ width:'100%', textAlign:'left', background:selected===t.id?'#191d2b':'transparent', border:'none', borderTop:'1px solid #1e2535', color:'inherit', padding:'12px 4px', cursor:'pointer' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:12 }}>
-                <span style={{ color: t.decision==='surfaced' ? '#4ade80' : '#fbbf24' }}>{t.decision}</span>
-                <span style={{ color:'#475569' }}>{timeAgo(t.created_at)}</span>
-              </div>
-              <div style={{ margin:'5px 0', fontSize:13 }}>{t.title || 'Suppressed candidate'}</div>
-              <div style={{ ...mono, fontSize:10, color:'#64748b' }}>
-                {t.org_name} · {t.source} · query: {t.metadata?.detected_query || 'source match'} · quality {t.quality?.score ?? '—'} · escalation {t.escalation_score ?? '—'}
-              </div>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'baseline', marginBottom:10 }}>
+            <div style={{ ...mono, color:'#94a3b8', fontSize:11, letterSpacing:'.1em' }}>EVENT TRACE EXPLORER</div>
+            <div style={{ ...mono, fontSize:9, color:'#64748b' }}>
+              {traceTotals?.total != null ? `${traces.length} shown · ${traceTotals.total} total` : `${traces.length} shown`}
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:10 }}>
+            {['all','7d','30d','24h','6h'].map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setTraceRange(r)}
+                style={{
+                  padding:'4px 8px', borderRadius:99,
+                  border: traceRange === r ? '1px solid #2563eb' : '1px solid #243047',
+                  background: traceRange === r ? '#1e3a8a' : 'transparent',
+                  color: traceRange === r ? '#dbeafe' : '#94a3b8',
+                  cursor:'pointer', fontSize:10, fontFamily:'inherit',
+                }}
+              >
+                {r === 'all' ? 'all time' : r}
+              </button>
+            ))}
+            <select
+              value={traceOrgId}
+              onChange={(e) => setTraceOrgId(e.target.value)}
+              style={{ ...inputStyle, flex:'1 1 160px', minWidth:160 }}
+            >
+              <option value="">All organisations</option>
+              {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          </div>
+          {traceTotals?.oldest && (
+            <div style={{ ...mono, fontSize:9, color:'#475569', marginBottom:8 }}>
+              oldest available {new Date(traceTotals.oldest).toLocaleString()}
+            </div>
+          )}
+          <div style={{ maxHeight:560, overflow:'auto' }}>
+            {traceListLoading ? (
+              <p style={{ color:'#64748b', fontSize:13 }}>Loading history…</p>
+            ) : traces.length ? traces.map(t => (
+              <button key={t.id} onClick={() => openTrace(t.id)} style={{ width:'100%', textAlign:'left', background:selected===t.id?'#191d2b':'transparent', border:'none', borderTop:'1px solid #1e2535', color:'inherit', padding:'12px 4px', cursor:'pointer' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:12 }}>
+                  <span style={{ color: t.decision==='surfaced' || t.decision==='surfaced_override' ? '#4ade80' : (String(t.decision||'').includes('reject') ? '#f87171' : '#fbbf24') }}>{t.decision}</span>
+                  <span style={{ color:'#475569' }}>{timeAgo(t.created_at)}</span>
+                </div>
+                <div style={{ margin:'5px 0', fontSize:13 }}>{t.title || 'Suppressed candidate'}</div>
+                <div style={{ ...mono, fontSize:10, color:'#64748b' }}>
+                  {t.org_name} · {t.source} · {new Date(t.created_at).toLocaleString()} · quality {t.quality?.score ?? '—'} · escalation {t.escalation_score ?? '—'}
+                </div>
+              </button>
+            )) : <p style={{ color:'#64748b', fontSize:13 }}>No traces in this range. Run a refresh or widen the time window.</p>}
+          </div>
+          {tracePage?.has_more && (
+            <button
+              type="button"
+              disabled={traceListBusy}
+              onClick={() => loadTraces({ append: true, before: tracePage.next_before })}
+              style={{ marginTop:10, width:'100%', padding:'8px 10px', border:'1px solid #243047', borderRadius:6, background:'#191d2b', color:'#93c5fd', cursor:'pointer', fontSize:11 }}
+            >
+              {traceListBusy ? 'loading older…' : 'load older traces'}
             </button>
-          )) : <p style={{ color:'#64748b', fontSize:13 }}>No traces yet. Run a refresh to begin recording decisions.</p>}
+          )}
         </div>
         <div style={card}>
           {traceError && <div style={{ color:'#f87171', fontSize:12, marginBottom:10 }}>{traceError}</div>}

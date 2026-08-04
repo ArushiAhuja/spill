@@ -82,10 +82,63 @@ export async function GET(request) {
       }, observations || []);
       return NextResponse.json({ ...payload, ...explanation });
     }
+    // History is stored indefinitely. The previous hard LIMIT 100 made high-volume
+    // orgs look like they only had ~hours of traces. Support explicit range + cursor pages.
     const params = [];
     const clauses = [];
     if (orgId) { params.push(orgId); clauses.push(`t.org_id=$${params.length}`); }
     if (!scope.all) { params.push(scope.orgIds); clauses.push(`t.org_id = ANY($${params.length}::uuid[])`); }
+
+    const range = String(url.searchParams.get('range') || 'all').toLowerCase();
+    const rangeMap = {
+      '6h': "INTERVAL '6 hours'",
+      '24h': "INTERVAL '24 hours'",
+      '7d': "INTERVAL '7 days'",
+      '30d': "INTERVAL '30 days'",
+      'all': null,
+    };
+    const rangeSql = Object.prototype.hasOwnProperty.call(rangeMap, range) ? rangeMap[range] : null;
+    // Invalid range keys fall back to all history (not a silent 6h window).
+    if (rangeSql) clauses.push(`t.created_at > NOW() - ${rangeSql}`);
+
+    const before = url.searchParams.get('before'); // ISO timestamp cursor for older pages
+    if (before) {
+      const beforeDate = new Date(before);
+      if (!Number.isNaN(beforeDate.getTime())) {
+        params.push(beforeDate.toISOString());
+        clauses.push(`t.created_at < $${params.length}::timestamptz`);
+      }
+    }
+
+    const decision = url.searchParams.get('decision');
+    if (decision && decision !== 'all') {
+      if (decision === 'rejected') {
+        clauses.push(`(t.decision LIKE 'reject%' OR t.decision LIKE 'rejected%')`);
+      } else if (decision === 'suppressed') {
+        clauses.push(`t.decision LIKE 'suppressed%'`);
+      } else if (decision === 'surfaced') {
+        clauses.push(`(t.decision = 'surfaced' OR t.decision = 'surfaced_override')`);
+      } else {
+        params.push(decision);
+        clauses.push(`t.decision = $${params.length}`);
+      }
+    }
+
+    const q = (url.searchParams.get('q') || '').trim();
+    if (q) {
+      params.push(`%${q.replace(/[%_]/g, '')}%`);
+      clauses.push(`(
+        COALESCE(p.title,'') ILIKE $${params.length}
+        OR t.trace_key ILIKE $${params.length}
+        OR t.source ILIKE $${params.length}
+        OR t.decision ILIKE $${params.length}
+      )`);
+    }
+
+    const requestedLimit = parseInt(url.searchParams.get('limit') || '100', 10);
+    const limit = Math.max(1, Math.min(Number.isFinite(requestedLimit) ? requestedLimit : 100, 500));
+    params.push(limit + 1); // fetch one extra to detect next page
+
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const { rows } = await query(
       `SELECT t.id,t.trace_key,t.event_id,t.org_id,t.source,t.decision,t.quality,t.metadata,t.created_at,o.name AS org_name,o.slug AS org_slug,p.title,p.escalation_score
@@ -94,10 +147,43 @@ export async function GET(request) {
        LEFT JOIN posts p ON p.id=t.post_id
        ${where}
        ORDER BY t.created_at DESC
-       LIMIT 100`,
+       LIMIT $${params.length}`,
       params
     );
-    return NextResponse.json({ traces: rows });
+    const hasMore = rows.length > limit;
+    const traces = hasMore ? rows.slice(0, limit) : rows;
+    const nextBefore = hasMore && traces.length ? traces[traces.length - 1].created_at : null;
+
+    // Lightweight totals so the UI can show "older history exists" without loading everything.
+    const countParams = [];
+    const countClauses = [];
+    if (orgId) { countParams.push(orgId); countClauses.push(`org_id=$${countParams.length}`); }
+    if (!scope.all) { countParams.push(scope.orgIds); countClauses.push(`org_id = ANY($${countParams.length}::uuid[])`); }
+    if (rangeSql) countClauses.push(`created_at > NOW() - ${rangeSql}`);
+    const countWhere = countClauses.length ? `WHERE ${countClauses.join(' AND ')}` : '';
+    const { rows: [totals] } = await query(
+      `SELECT COUNT(*)::int AS total,
+              MIN(created_at) AS oldest,
+              MAX(created_at) AS newest
+       FROM ai_traces
+       ${countWhere}`,
+      countParams
+    );
+
+    return NextResponse.json({
+      traces,
+      page: {
+        limit,
+        has_more: hasMore,
+        next_before: nextBefore,
+        range: rangeMap[range] !== undefined ? range : 'all',
+      },
+      totals: {
+        total: totals?.total || 0,
+        oldest: totals?.oldest || null,
+        newest: totals?.newest || null,
+      },
+    });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
