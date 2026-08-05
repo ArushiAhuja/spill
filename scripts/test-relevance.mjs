@@ -2,13 +2,19 @@
 /**
  * Phase G — Relevance Filter Test Harness
  *
- * Runs 50 relevant + 50 irrelevant posts through the AI relevance filter
- * (same prompt used in scheduler.js aiRelevanceFilter) and measures precision/recall.
+ * Runs labelled posts through the AI relevance filter and measures precision/recall/F1.
+ *
+ * Suites:
+ *   easy  — original 50/50 obvious-brand corpus (high baseline accuracy)
+ *   hard  — edge cases: typos, parent-company-only, Hinglish, brand-as-list noise,
+ *           "mama earth" environmental homonyms, competitor near-misses
+ *   all   — easy + hard
  *
  * Usage:
- *   node scripts/test-relevance.mjs              # run & compare vs baseline
- *   node scripts/test-relevance.mjs --save       # run & save as new baseline
- *   node scripts/test-relevance.mjs --auto-rollback  # exit 1 + git revert on regression
+ *   node scripts/test-relevance.mjs                 # suite=all
+ *   node scripts/test-relevance.mjs --suite hard    # optimizable harder metric
+ *   node scripts/test-relevance.mjs --save
+ *   node scripts/test-relevance.mjs --auto-rollback
  */
 
 import OpenAI from 'openai';
@@ -166,7 +172,75 @@ const IRRELEVANT_POSTS = [
   { id: 'i050', source: 'reddit', title: 'Your holy grail product? Drop it below!', body: 'Looking for recommendations. Share your single best find that transformed your skin or hair.' },
 ].map(p => ({ ...p, expected_relevant: false }));
 
-const ALL_POSTS = [...RELEVANT_POSTS, ...IRRELEVANT_POSTS];
+// Hard edge cases — designed to break the saturated easy suite (F1≈1.0).
+// Labels follow operational monitoring intent for Mamaearth specifically.
+const HARD_RELEVANT = [
+  { id: 'hr001', source: 'twitter', title: 'momaearth onion oil burned my scalp after two uses', body: 'Spelling is wrong on purpose — brand is Mamaearth. Bottle from their site. Scalp peeling.' },
+  { id: 'hr002', source: 'reddit', title: 'Honasa Consumer sacks 180 warehouse staff overnight', body: 'Parent company of Mamaearth reportedly shut a Noida hub. Staff unpaid for overtime claims.' },
+  { id: 'hr003', source: 'reddit', title: 'मेरे बच्चे को Mamaearth baby lotion से तेज़ रैश हो गया', body: 'Hinglish complaint. Pediatrician said stop fragrance products. Brand bottle still sealed with receipt.' },
+  { id: 'hr004', source: 'google_news', title: 'Honasa (Mamaearth parent) faces ASCI notice on "toxin free" ads', body: 'Advertising Standards Council flags product claims by Honasa Consumer brands including Mamaearth.' },
+  { id: 'hr005', source: 'twitter', title: 'ME onion oil COD scammed — never delivered', body: 'Locals abbreviate Mamaearth as ME. Order ME-99321 paid. Tracking frozen. Support unread for 9 days.' },
+  { id: 'hr006', source: 'reddit', title: 'Switched from Mamaearth ubtan to Minimalist — still dealing with ME refund', body: 'Primary topic is Minimalist now, but refund for Mamaearth ubtan is open for 3 weeks.' },
+  { id: 'hr007', source: 'reddit', title: 'batch code looks forged on "natural" face wash i bought offline', body: 'Seller said it is mama earth brand from company stall. Seal font wrong. Asking if anyone verifies batch ME-BN-441.' },
+  { id: 'hr008', source: 'hackernews', title: 'Show HN: scraped Honasa filings + product-claim diffs', body: 'Diff tool on Honasa Consumer annual reports vs live Mamaearth product pages. Greenwashing angles.' },
+  { id: 'hr009', source: 'twitter', title: 'Influencer PR box asks for 5★ without disclosing Mamaearth gift', body: 'Box from brand team. Card says leave Amazon review, do not mention free product. Unethical.' },
+  { id: 'hr010', source: 'reddit', title: 'Is Mama Earth vitamin C serum oxidizing this fast for anyone?', body: 'Brand with a space typo. Same orange bottle. Official site order. Oxidised in 10 days.' },
+  { id: 'hr011', source: 'google_news', title: 'NCLT admits insolvency petition against logistics vendor used by Honasa', body: 'Vendor ships majority of Mamaearth D2C orders. Risk to delivery SLAs and refunds.' },
+  { id: 'hr012', source: 'playstore', title: 'Checkout loops forever after UPI', body: 'Only happens on Mamaearth app for onion hair oil cart. Multiple payment attempts, money stuck.' },
+  { id: 'hr013', source: 'reddit', title: 'dermatologist called out their "toxin free" line on Instagram live', body: 'Named Mamaearth explicitly mid-stream. Clips circulating. Not a generic clean-beauty rant.' },
+  { id: 'hr014', source: 'twitter', title: 'received someone else\'s order + their address printed', body: 'Mamaearth package swap. PII leak risk. Ticket #CS-22081 open.' },
+  { id: 'hr015', source: 'reddit', title: 'Plant-a-tree claim for my Mamaearth order — NGO never heard of campaign', body: 'I asked three NGOs listed in the email. Zero confirmation. Green marketing fraud angle.' },
+  { id: 'hr016', source: 'google_news', title: 'Mamaearth UAE distributor sued over expiry stickers', body: 'GCC marketplace listings allegedly had manufacturing dates overwritten.' },
+  { id: 'hr017', source: 'reddit', title: 'comparing ME vs WOW ACV for thinning hair — week 4', body: 'Side by side. Mamaearth onion oil vs WOW. Need both labels correctly tracked as brand mentions.' },
+  { id: 'hr018', source: 'twitter', title: 'CSAT tanking after Zepto 10-min expansion for ME SKUs', body: 'Quick commerce stockouts blamed on Mamaearth replenishment. Store teams complaining on X.' },
+  { id: 'hr019', source: 'reddit', title: 'Found SLES on the INCI despite sulfate-free claim', body: 'Photo of Mamaearth face wash label. False advertising report to consumer forum planned.' },
+  { id: 'hr020', source: 'appstore', title: 'OTP never arrives, cannot cancel auto-ship', body: 'Mamaearth iOS app. Subscription still billing. Support script loop for 11 days.' },
+  { id: 'hr021', source: 'reddit', title: 'parent company stock dump after channel checks', body: 'Honasa shares drop; channel checks on Mamaearth offline sell-through are the reason cited.' },
+  { id: 'hr022', source: 'twitter', title: 'unboxing shows empty cavity where serum should be', body: 'Mamaearth multi-buy kit. Invoice has 4 items, box has 3. Asking for unboxing video again.' },
+  { id: 'hr023', source: 'google_news', title: 'Karnataka FDA samples "toxin-free" baby lotion lot for ADRs', body: 'Adverse reaction reports clustered on Mamaearth baby SKU sold in Bengaluru modern trade.' },
+  { id: 'hr024', source: 'reddit', title: 'agent said refund needs "manager approval" for 45 days', body: 'Classic stall. Order is Mamaearth site direct. Chat transcript attached.' },
+  { id: 'hr025', source: 'hackernews', title: 'Privacy audit: Android app permissions for beauty D2C apps', body: 'Deep dive includes Mamaearth vs Plum vs Sugar. Contacts + location overcollection called out for Mamaearth specifically.' },
+].map(p => ({ ...p, expected_relevant: true, difficulty: 'hard' }));
+
+const HARD_IRRELEVANT = [
+  { id: 'hi001', source: 'reddit', title: "Happy Earth Day — protect mama earth from microplastics", body: 'No brand. Environmental post. Reusable bottles and beach cleanups only.' },
+  { id: 'hi002', source: 'reddit', title: 'Homemade onion and castor oil for hair growth', body: 'Kitchen recipe. No commercial brands. "Mama told me" is about the author\'s mother.' },
+  { id: 'hi003', source: 'reddit', title: 'WOW Skin Science ACV shampoo burned my scalp', body: 'Competitor complaint. Never mentions Mamaearth. Context-query trap for "shampoo" + "burn".' },
+  { id: 'hi004', source: 'reddit', title: 'Best toxin-free baby lotion in India — pediatrician picks', body: 'Recommends Cetaphil Baby and Sebamed. Mamaearth not named. Category keyword trap.' },
+  { id: 'hi005', source: 'google_news', title: "ASCI tightens influencer disclosure rules for beauty ads", body: 'Industry-wide. No company named Mamaearth or Honasa.' },
+  { id: 'hi006', source: 'reddit', title: 'Minimalist niacinamide vs The Ordinary — acne scars', body: 'International + Indian competitor only. No Mamaearth.' },
+  { id: 'hi007', source: 'reddit', title: 'Mother Earth foundation plantable stationery review', body: 'Completely different brand/product category. Homonym for "earth".' },
+  { id: 'hi008', source: 'twitter', title: 'Earth Mama organic belly butter unboxing', body: 'US pregnancy brand Earth Mama. Not Mamaearth India.' },
+  { id: 'hi009', source: 'reddit', title: 'Plum, Forest Essentials, Biotique starter routine', body: 'Three Indian beauty brands. Mamaearth absent. "Natural beauty" keywords only.' },
+  { id: 'hi010', source: 'reddit', title: 'How mothers can teach kids to care for the earth', body: 'Parenting + environment. Phrase "mama, earth" split. Zero brand signal.' },
+  { id: 'hi011', source: 'google_news', title: "India's D2C personal care funding cools in 2026", body: 'Sector piece. Mentions Sugar and Bombay Shaving Company. Not Mamaearth.' },
+  { id: 'hi012', source: 'reddit', title: 'SLS vs SLES — are sulfate free shampoos marketing?', body: 'Ingredient education. No commercial brand claim about Mamaearth.' },
+  { id: 'hi013', source: 'reddit', title: 'Zepto 10 minute medicine delivery experience in Pune', body: 'Quick commerce logistics. Beauty brand not present.' },
+  { id: 'hi014', source: 'twitter', title: 'Honasa means "home" in Japanese poetry Twitter', body: 'Language trivia. Not Honasa Consumer or Mamaearth.' },
+  { id: 'hi015', source: 'reddit', title: 'Ubtan diy: gram flour + turmeric face pack', body: 'Homemade ubtan recipe. No Mamaearth bottle, site, or app.' },
+  { id: 'hi016', source: 'reddit', title: 'SEBI settles with random fintech on influencer ads', body: 'Regulatory news. Not beauty, not Mamaearth.' },
+  { id: 'hi017', source: 'appstore', title: 'Nykaa crashes on checkout', body: 'Competitor app reliability complaint. No Mamaearth.' },
+  { id: 'hi018', source: 'reddit', title: 'Vitamin C serum oxidized — The Ordinary 23%', body: 'Classic oxidization complaint for The Ordinary. Brand is not Mamaearth.' },
+  { id: 'hi019', source: 'google_news', title: 'Mother Dairy expands protein milk in North India', body: '"Mother" brand in India. Dairy, not beauty.' },
+  { id: 'hi020', source: 'reddit', title: 'Allergic reaction to random local fancy store face pack', body: 'Unknown label. No Mamaearth, no Honasa. Generic dermatology advice replies.' },
+  { id: 'hi021', source: 'reddit', title: 'Which is better: Himalaya or Biotique neem wash?', body: 'Competitor pairwise. Context keywords match without brand.' },
+  { id: 'hi022', source: 'twitter', title: 'IPO oversubscribed 7x — Paytm nostalgia thread', body: 'Generic IPO chatter. Mentions "D2C beauty unicorns" without naming Mamaearth.' },
+  { id: 'hi023', source: 'reddit', title: 'Plant a tree campaigns that are usually greenwashing', body: 'Abstract ESG critique of many brands. No specific Mamaearth claim.' },
+  { id: 'hi024', source: 'reddit', title: 'COD scams rising on small Instagram brands', body: 'Category risk story. Not Mamaearth order numbers or support tickets.' },
+  { id: 'hi025', source: 'reddit', title: 'Guide: how to read INCI without marketing lies', body: 'Educational. Mentions "brands claim sulfate free" generically.' },
+].map(p => ({ ...p, expected_relevant: false, difficulty: 'hard' }));
+
+const EASY_POSTS = [
+  ...RELEVANT_POSTS.map(p => ({ ...p, difficulty: 'easy' })),
+  ...IRRELEVANT_POSTS.map(p => ({ ...p, difficulty: 'easy' })),
+];
+const HARD_POSTS = [...HARD_RELEVANT, ...HARD_IRRELEVANT];
+
+function selectCorpus(suite) {
+  if (suite === 'hard') return HARD_POSTS;
+  if (suite === 'easy') return EASY_POSTS;
+  return [...EASY_POSTS, ...HARD_POSTS];
+}
 
 // ── Relevance Filter (mirrors scheduler.js aiRelevanceFilter prompt exactly) ─
 
@@ -283,7 +357,7 @@ function printMetrics(m, label = '') {
   console.log(`\n${'─'.repeat(50)}`);
   if (label) console.log(`  ${label}`);
   console.log(`${'─'.repeat(50)}`);
-  console.log(`  Corpus:    ${m.total} posts (50 relevant + 50 irrelevant)`);
+  console.log(`  Corpus:    ${m.total} posts`);
   console.log(`  Kept:      ${m.kept} posts`);
   console.log(`\n  TP: ${m.TP}  FP: ${m.FP}  FN: ${m.FN}  TN: ${m.TN}`);
   console.log(`\n  Precision: ${pct(m.precision)}  (of kept, % actually relevant)`);
@@ -320,35 +394,59 @@ function checkRegression(current, baseline) {
 const args = process.argv.slice(2);
 const saveBaseline = args.includes('--save');
 const autoRollback = args.includes('--auto-rollback');
+const suiteArg = args.find((a) => a.startsWith('--suite='))?.split('=')[1]
+  || (args.includes('--suite') ? args[args.indexOf('--suite') + 1] : 'all');
+const suite = ['easy', 'hard', 'all'].includes(suiteArg) ? suiteArg : 'all';
+
+const ALL_POSTS = selectCorpus(suite);
+const relevantCount = ALL_POSTS.filter((p) => p.expected_relevant).length;
+const irrelevantCount = ALL_POSTS.length - relevantCount;
 
 console.log('\n=== Spill Relevance Filter Test Harness ===');
 console.log(`Org: ${ORG.name}`);
-console.log(`Posts: ${RELEVANT_POSTS.length} relevant + ${IRRELEVANT_POSTS.length} irrelevant = ${ALL_POSTS.length} total`);
+console.log(`Suite: ${suite}`);
+console.log(`Posts: ${relevantCount} relevant + ${irrelevantCount} irrelevant = ${ALL_POSTS.length} total`);
 console.log('\nRunning AI relevance filter...');
 
 const kept = await runRelevanceFilter(ALL_POSTS);
 const metrics = computeMetrics(ALL_POSTS, kept);
 
-printMetrics(metrics, 'Current Run Results');
+// Slice metrics when running all: easy+hard are both scorable.
+const hardSlice = ALL_POSTS.filter((p) => p.difficulty === 'hard');
+const easySlice = ALL_POSTS.filter((p) => p.difficulty === 'easy');
+const hardMetrics = hardSlice.length ? computeMetrics(hardSlice, kept.filter((p) => p.difficulty === 'hard')) : null;
+const easyMetrics = easySlice.length ? computeMetrics(easySlice, kept.filter((p) => p.difficulty === 'easy')) : null;
 
-// Baseline comparison
+printMetrics(metrics, `Current Run Results (${suite})`);
+if (hardMetrics) printMetrics(hardMetrics, 'Hard edge-case slice');
+if (easyMetrics) printMetrics(easyMetrics, 'Easy/clear-brand slice');
+
+// Primary optimizable score for evo: hard F1 when available, else suite F1.
+const primary = hardMetrics || metrics;
+
+// Baseline comparison (suite-scoped filenames for hard)
 if (!existsSync(RESULTS_DIR)) mkdirSync(RESULTS_DIR, { recursive: true });
+const suiteBaselineFile = suite === 'all'
+  ? BASELINE_FILE
+  : join(RESULTS_DIR, `relevance-baseline-${suite}.json`);
 
-if (saveBaseline || !existsSync(BASELINE_FILE)) {
+if (saveBaseline || !existsSync(suiteBaselineFile)) {
   const baselineData = {
     saved_at: new Date().toISOString(),
-    precision: metrics.precision,
-    recall: metrics.recall,
-    f1: metrics.f1,
-    accuracy: metrics.accuracy,
-    TP: metrics.TP, FP: metrics.FP, FN: metrics.FN, TN: metrics.TN,
-    kept: metrics.kept,
-    corpus_size: metrics.total,
+    suite,
+    precision: primary.precision,
+    recall: primary.recall,
+    f1: primary.f1,
+    accuracy: primary.accuracy,
+    TP: primary.TP, FP: primary.FP, FN: primary.FN, TN: primary.TN,
+    kept: primary.kept,
+    corpus_size: primary.total,
   };
-  writeFileSync(BASELINE_FILE, JSON.stringify(baselineData, null, 2));
-  console.log(`\n✓ Baseline saved → ${BASELINE_FILE}`);
-} else {
-  const baseline = JSON.parse(readFileSync(BASELINE_FILE, 'utf-8'));
+  writeFileSync(suiteBaselineFile, JSON.stringify(baselineData, null, 2));
+  console.log(`\n✓ Baseline saved → ${suiteBaselineFile}`);
+} else if (suite !== 'hard') {
+  // Hard suite is intentionally harder — skip easy regression gate against old 1.0 baselines.
+  const baseline = JSON.parse(readFileSync(suiteBaselineFile, 'utf-8'));
   console.log(`\nBaseline (${baseline.saved_at.slice(0, 10)}): precision=${pct(baseline.precision)} recall=${pct(baseline.recall)} f1=${pct(baseline.f1)}`);
 
   const regressions = checkRegression(metrics, baseline);
@@ -376,6 +474,8 @@ if (saveBaseline || !existsSync(BASELINE_FILE)) {
 
     process.exit(1);
   }
+} else {
+  console.log('\nHard suite: regression gate skipped (optimize headroom). Use --save to pin a hard baseline.');
 }
 
 // Save full result log
@@ -383,9 +483,24 @@ const logFile = join(RESULTS_DIR, `relevance-run-${Date.now()}.json`);
 writeFileSync(logFile, JSON.stringify({
   run_at: new Date().toISOString(),
   org: ORG.name,
-  metrics: { precision: metrics.precision, recall: metrics.recall, f1: metrics.f1, accuracy: metrics.accuracy, TP: metrics.TP, FP: metrics.FP, FN: metrics.FN, TN: metrics.TN },
-  false_positives: metrics.falsePositives.map(p => ({ id: p.id, title: p.title })),
-  false_negatives: metrics.falseNegatives.map(p => ({ id: p.id, title: p.title })),
+  suite,
+  metrics: {
+    precision: metrics.precision, recall: metrics.recall, f1: metrics.f1, accuracy: metrics.accuracy,
+    TP: metrics.TP, FP: metrics.FP, FN: metrics.FN, TN: metrics.TN,
+  },
+  hard_metrics: hardMetrics ? {
+    precision: hardMetrics.precision, recall: hardMetrics.recall, f1: hardMetrics.f1, accuracy: hardMetrics.accuracy,
+    TP: hardMetrics.TP, FP: hardMetrics.FP, FN: hardMetrics.FN, TN: hardMetrics.TN,
+  } : null,
+  easy_metrics: easyMetrics ? {
+    precision: easyMetrics.precision, recall: easyMetrics.recall, f1: easyMetrics.f1, accuracy: easyMetrics.accuracy,
+    TP: easyMetrics.TP, FP: easyMetrics.FP, FN: easyMetrics.FN, TN: easyMetrics.TN,
+  } : null,
+  primary_score: primary.f1,
+  primary_slice: hardMetrics ? 'hard' : suite,
+  false_positives: metrics.falsePositives.map(p => ({ id: p.id, title: p.title, difficulty: p.difficulty || null })),
+  false_negatives: metrics.falseNegatives.map(p => ({ id: p.id, title: p.title, difficulty: p.difficulty || null })),
 }, null, 2));
 console.log(`\nFull result log → ${logFile}`);
+console.log(`Primary score (for evo): ${primary.f1.toFixed(4)} [${hardMetrics ? 'hard' : suite}]`);
 console.log('\nDone.\n');
