@@ -5,13 +5,49 @@ const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 
 export function signalQuality(post, novelty = 1) {
   const d = post.escalation_dimensions || {};
   const relevance = post.is_relevant === false ? 0 : 1;
-  const impact = Math.min(1, ((d.customer_impact || 0) * .45 + (d.operational_urgency || 0) * .35 + (d.trust_risk || 0) * .20) / 10);
+  let impact = Math.min(1, ((d.customer_impact || 0) * .45 + (d.operational_urgency || 0) * .35 + (d.trust_risk || 0) * .20) / 10);
+  // External brand/press hits (especially brand-query Google News) should clear the
+  // quality gate even when dimension scores are low/neutral — leadership still needs
+  // to see third-party coverage of the brand / CEO.
+  const brandPress = post.brand_query_hit || post.query_brand_positive
+    || /ceo|founder|op-?ed|opinion|press|interview/i.test(`${post.title || ''} ${post.body || ''}`);
+  if (relevance && brandPress && impact < 0.35) {
+    impact = 0.35;
+  }
   const confidence = Math.max(.05, Math.min(1, Number(post.classification_confidence ?? .65)));
   const score = Math.round(relevance * impact * confidence * novelty * 100);
   return { relevance, impact: Number(impact.toFixed(2)), confidence: Number(confidence.toFixed(2)), novelty, score };
 }
 
+/**
+ * Find an existing decision trace for the same org+source+external_id.
+ * Used to skip re-inserting identical rejection traces every refresh (storage).
+ */
+export async function findExistingDecisionTrace(orgId, source, externalId, decisions = ['rejected_irrelevant', 'suppressed_low_quality']) {
+  if (!orgId || !externalId) return null;
+  const { rows } = await query(
+    `SELECT id FROM ai_traces
+     WHERE org_id = $1
+       AND COALESCE(source, '') = COALESCE($2, '')
+       AND metadata->>'external_id' = $3
+       AND decision = ANY($4::text[])
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [orgId, source || null, String(externalId), decisions]
+  );
+  if (rows[0]) {
+    return rows[0].id;
+  }
+  return null;
+}
+
 export async function createEventTrace({ orgId, post, quality, decision, decisionEvidence = {}, promptVersions = {}, observations = [], sourceObservation = null }) {
+  // Safety net: never insert a second identical reject for the same external_id
+  if (decision === 'rejected_irrelevant' || decision === 'suppressed_low_quality') {
+    const existing = await findExistingDecisionTrace(orgId, post.source, post.id, [decision]);
+    if (existing) return existing;
+  }
+
   const { rows: [trace] } = await query(
     `INSERT INTO ai_traces (org_id, source, status, decision, quality, decision_evidence, metadata, trace_key)
      VALUES ($1,$2,'completed',$3,$4,$5,$6,'spill_trace_' || replace(gen_random_uuid()::text,'-','')) RETURNING id,trace_key,event_id`,
@@ -22,7 +58,8 @@ export async function createEventTrace({ orgId, post, quality, decision, decisio
       url: post.url || null,
       author: post.author || null,
       engagement: post.score || 0,
-      detected_query: post.detected_query || null,
+      detected_query: post.detected_query || post.matched_query || null,
+      brand_query_hit: !!(post.brand_query_hit || post.query_brand_positive),
       prompt_versions: promptVersions,
     })]
   );

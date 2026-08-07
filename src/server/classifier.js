@@ -126,7 +126,7 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
 - virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
 
 Rules:
-- is_relevant: Set to FALSE when: (a) the company name "${orgName || 'this company'}" does not appear in the post AND there is no clear product/service connection, OR (b) the post is entirely about a different company with no mention of this one. Set TRUE only when this company is a named or obvious subject of the post.${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
+- is_relevant: Set to FALSE when: (a) the company name "${orgName || 'this company'}" does not appear in the post AND there is no clear product/service connection AND the item was not retrieved via a brand-name news query, OR (b) the post is entirely about a different company with no mention of this one, OR (c) the content is self-published by this organisation (own website / official handle). Set TRUE for external brand mentions (third-party press, Reddit, reviews) including CEO/leadership opinion pieces that name this company. Brand-query Google News hits are relevant even when the title is truncated.${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
 - category_id: best matching category ID. null if not relevant or no match.
 - response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
 - location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`;
@@ -191,15 +191,27 @@ Rules:
     };
 
     // Relevance guard: if the AI says relevant but neither the brand name nor any
-    // intel keyword appears in the post, override to irrelevant.
-    // This catches hallucinated relevance for generic or competitor-only posts.
+    // intel keyword appears in the post, override to irrelevant — unless this
+    // candidate arrived via a brand Google News / brand search query (titles can
+    // be truncated by the publisher feed).
     // Tier-2 posts (operational keyword match) always have intel keywords so they pass through.
-    if (cls.is_relevant !== false && brandPattern) {
+    const brandQueryHit = post.brand_query_hit === true || post.query_brand_positive === true;
+    if (cls.is_relevant !== false && brandPattern && !brandQueryHit) {
       const postText = `${post.title || ''} ${post.body || ''}`;
       const hasBrand = brandPattern.test(postText);
       const hasIntelKw = intelKws.some(kw => postText.toLowerCase().includes(kw));
       if (!hasBrand && !hasIntelKw) {
         cls.is_relevant = false;
+      }
+    }
+    // Brand-query hits from external sources stay relevant when AI is unsure
+    if (brandQueryHit && cls.is_relevant === false) {
+      const postText = `${post.title || ''} ${post.body || ''} ${post.publisher || ''}`;
+      // Only force-keep when there is at least some soft signal (enriched title brand or source body)
+      const softBrand = brandPattern && brandPattern.test(postText);
+      if (softBrand || (post.title_enriched && postText.length > 20)) {
+        cls.is_relevant = true;
+        cls.reasoning = (cls.reasoning ? cls.reasoning + ' ' : '') + 'Kept: brand news query hit with external source.';
       }
     }
 

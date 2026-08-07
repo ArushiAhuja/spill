@@ -395,6 +395,7 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_created ON ai_traces(org_id, created_at DESC)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_external_decision ON ai_traces (org_id, source, (metadata->>'external_id'), decision)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_ai_observations_trace ON ai_observations(trace_id, created_at)`);
   await query(`
     CREATE TABLE IF NOT EXISTS signal_clusters (

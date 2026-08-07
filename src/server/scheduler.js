@@ -10,8 +10,15 @@ import { ensureMigrations } from './migrate.js';
 import { getOrgFeedbackContext, updateOrgIntelligence } from './feedback.js';
 import { getPrompt, getPromptMetadata } from './prompts.js';
 import { getOrganizationAgentConfig, buildAgentPolicyContext } from './organization-agent-config.js';
-import { assignCluster, createEventTrace, executiveSummary, linkTraceToPost, recordTraceObservation, signalQuality } from './observability.js';
+import { assignCluster, createEventTrace, executiveSummary, linkTraceToPost, recordTraceObservation, signalQuality, findExistingDecisionTrace } from './observability.js';
 import { composePrompt } from './prompt-composer.js';
+import {
+  brandKeyword,
+  buildBrandTerms,
+  textMentionsBrand,
+  isSelfPublished,
+  isBrandQueryPositive,
+} from './relevance-policy.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -193,22 +200,6 @@ export async function runAllOrgs({ concurrency = Number(process.env.REFRESH_CONC
   };
 }
 
-const SKIP_PREFIXES = new Set([
-  'the', 'a', 'an', 'my', 'our', 'for', 'and', 'by', 'of', 'in', 'at',
-  'india', 'indian', 'pvt', 'ltd', 'inc', 'llc', 'co', 'corp',
-]);
-
-// Returns a 1-2 word brand phrase. For "Chimes Aviation" → "chimes aviation",
-// preventing single common words like "chimes" (a verb) from causing false positives.
-function brandKeyword(orgName) {
-  const words = (orgName || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
-  const significant = words.filter(w => w.length >= 4 && !SKIP_PREFIXES.has(w));
-  if (significant.length >= 2) return significant.slice(0, 2).join(' ');
-  if (significant.length === 1) return significant[0];
-  // Fallback: longest word regardless of skip list
-  return words.sort((a, b) => b.length - a.length)[0] || null;
-}
-
 const INFLUENCER_THRESHOLD = 500;
 
 function detectInfluencer(post) {
@@ -237,10 +228,11 @@ export async function runOrgCycle(orgId) {
     logId = log.id;
 
     const { rows: [org] } = await query(
-      'SELECT name, description, industry_monitoring, industry_keywords, competitors, organization_profile, intel_profile, partner_brands, incident_threshold, plan, sla_first_response_minutes, alert_influencer_threshold, alert_viral_likes FROM organizations WHERE id = $1',
+      'SELECT name, description, website, industry_monitoring, industry_keywords, competitors, organization_profile, intel_profile, partner_brands, incident_threshold, plan, sla_first_response_minutes, alert_influencer_threshold, alert_viral_likes FROM organizations WHERE id = $1',
       [orgId]
     );
     const brand = brandKeyword(org?.name);
+    const brandTerms = buildBrandTerms(org || {}, { ...(org?.organization_profile || {}), ...(org?.intel_profile || {}) });
     const industryOn = !!org?.industry_monitoring;
     const industryKws = (org?.industry_keywords || []).map(k => k.toLowerCase()).filter(Boolean);
     const competitors = (org?.competitors || []).filter(Boolean);
@@ -312,6 +304,20 @@ export async function runOrgCycle(orgId) {
     const bySource = rawPosts.reduce((acc, p) => { acc[p.source] = (acc[p.source] || 0) + 1; return acc; }, {});
     console.log(`[org ${orgId}] fetched ${rawPosts.length} raw posts:`, JSON.stringify(bySource), JSON.stringify(fetchResult.diagnostics));
 
+    // Drop self-published material (own site / official social) — operators already know it.
+    const externalRawPosts = [];
+    let selfPublishedDropped = 0;
+    for (const p of rawPosts) {
+      if (isSelfPublished(p, org, sourceConfigs, intel)) {
+        selfPublishedDropped++;
+        continue;
+      }
+      externalRawPosts.push(p);
+    }
+    if (selfPublishedDropped) {
+      console.log(`[org ${orgId}] dropped ${selfPublishedDropped} self-published items`);
+    }
+
     // Build set of explicitly configured subreddits + context_queries for AI filter context
     const redditCfg = orgConfig.sources?.reddit?.config || {};
     const configuredSubreddits = new Set([
@@ -320,6 +326,13 @@ export async function runOrgCycle(orgId) {
     ].map(s => s.toLowerCase()));
     const contextQueries = Array.isArray(redditCfg.context_queries) ? redditCfg.context_queries : [];
     const redditQueries = Array.isArray(redditCfg.queries) ? redditCfg.queries.filter(q => q && q.length >= 3) : [];
+    const newsCfg = orgConfig.sources?.google_news?.config || {};
+    const brandQueries = [
+      ...(Array.isArray(newsCfg.queries) ? newsCfg.queries : []),
+      ...redditQueries,
+      brand,
+      org?.name,
+    ].filter(Boolean);
 
     function postSubreddit(p) {
       const m = p.url?.match(/reddit\.com\/r\/([^/?#]+)/i);
@@ -328,8 +341,9 @@ export async function runOrgCycle(orgId) {
 
     // Brand phrase check using word boundaries — "chimes aviation" won't match "a watch that chimes"
     function containsBrand(text) {
-      if (!brand) return false;
-      return new RegExp(`\\b${brand.replace(/\s+/g, '\\s+')}\\b`, 'i').test(text);
+      if (!brand && !brandTerms.length) return false;
+      if (brand && new RegExp(`\\b${brand.replace(/\s+/g, '\\s+')}\\b`, 'i').test(text)) return true;
+      return textMentionsBrand(text, brandTerms);
     }
 
     // Three-tier relevance system:
@@ -346,9 +360,11 @@ export async function runOrgCycle(orgId) {
     function tier1Match(p) {
       const text = `${p.title || ''} ${p.body || ''}`;
       if (containsExclusion(text)) return false;
-      // Brand phrase match
+      // Brand phrase / soft brand aliases (org name, parent names, intel keywords)
       if (containsBrand(text)) return true;
-      // Intel brand keywords
+      // Brand Google News / brand-query hits stay positive even if title was truncated
+      if (isBrandQueryPositive(p, brandTerms, brandQueries)) return true;
+      // Intel brand keywords (already covered by brandTerms; keep product keywords here)
       const lower = text.toLowerCase();
       if (intelBrandKws.some(kw => kw.length >= 4 && new RegExp(`\\b${kw.replace(/\s+/g, '\\s+')}\\b`, 'i').test(text))) return true;
       // Competitor match
@@ -381,10 +397,10 @@ export async function runOrgCycle(orgId) {
       return inConfiguredSubreddit || hasGeo;
     }
 
-    const tier1 = rawPosts.filter(p => tier1Match(p));
+    const tier1 = externalRawPosts.filter(p => tier1Match(p));
     const tier1Ids = new Set(tier1.map(p => p.id));
 
-    const tier2 = rawPosts.filter(p => {
+    const tier2 = externalRawPosts.filter(p => {
       if (tier1Ids.has(p.id)) return false;
       return tier2Match(p);
     });
@@ -392,7 +408,7 @@ export async function runOrgCycle(orgId) {
 
     // Tier 3: remaining posts from configured subreddits
     const tier3Candidates = brand
-      ? rawPosts.filter(p => {
+      ? externalRawPosts.filter(p => {
           if (tier1Ids.has(p.id) || tier2Ids.has(p.id)) return false;
           const sr = postSubreddit(p);
           return sr && configuredSubreddits.has(sr);
@@ -422,7 +438,8 @@ export async function runOrgCycle(orgId) {
     const newTier3 = tier3Filtered.filter(p => !seen.has(`${p.source}::${p.id}`));
     newDirect.forEach(p => {
       p.relevance_tier = tier1Ids.has(p.id) ? 'tier_1_direct_match' : 'tier_2_operational_match';
-      p.detected_query = p.relevance_tier === 'tier_1_direct_match' ? (brand || org.name) : 'operational intelligence keyword';
+      p.detected_query = p.matched_query
+        || (p.relevance_tier === 'tier_1_direct_match' ? (brand || org.name) : 'operational intelligence keyword');
     });
     newTier3.forEach(p => { p.relevance_tier = 'tier_3_ai_verified'; p.detected_query = 'configured subreddit context query'; });
     const newPosts = [...newDirect, ...newTier3];
@@ -484,6 +501,17 @@ export async function runOrgCycle(orgId) {
         : quality.score < qualityThreshold ? 'suppressed_low_quality' : 'surfaced';
       const categoryName = categories.find(c => c.id === post.category_id)?.name || 'Uncategorized';
       post.executive_summary = executiveSummary(post, categoryName);
+
+      // Dedupe rejected/suppressed candidates by external_id so the same RSS item
+      // does not create dozens of identical ai_traces every refresh cycle.
+      if (decision !== 'surfaced') {
+        const existingTraceId = await findExistingDecisionTrace(orgId, post.source, post.id, ['rejected_irrelevant', 'suppressed_low_quality']);
+        if (existingTraceId) {
+          post.ai_trace_id = existingTraceId;
+          continue;
+        }
+      }
+
       const [summaryComposition, trendComposition] = await Promise.all([
         composePrompt({ agentName: 'summary', orgId, organization: org, categories, sourceConfigs, agentConfig: summaryAgentConfig, model: 'deterministic-summary-v1', runtimeContext: { category: categoryName, reasoning: post.reasoning, dimensions: post.escalation_dimensions, signal: { title: post.title, body: post.body } } }),
         composePrompt({ agentName: 'trend', orgId, organization: org, categories, sourceConfigs, agentConfig: trendAgentConfig, model: 'deterministic-cluster-v1', runtimeContext: { category: categoryName, title: post.title, body: post.body, source: post.source } }),
@@ -491,7 +519,9 @@ export async function runOrgCycle(orgId) {
       post.ai_trace_id = await createEventTrace({
         orgId, post, quality, decision,
         decisionEvidence: {
-          detected_query: post.detected_query || null,
+          detected_query: post.detected_query || post.matched_query || null,
+          brand_query_hit: !!(post.brand_query_hit || post.query_brand_positive),
+          self_published: false,
           relevance: { tier: post.relevance_tier || null, is_relevant: post.is_relevant !== false },
           category: { id: post.category_id || null, name: categoryName, confidence: post.classification_confidence ?? null, reasoning: post.reasoning || null },
           severity: { escalation_score: post.escalation_score ?? null, escalated: !!post.escalated, dimensions: post.escalation_dimensions || {} },

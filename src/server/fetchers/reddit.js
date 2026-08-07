@@ -70,6 +70,10 @@ async function fetchViaApify(queries, subreddits, apiKey, operationalQueries) {
     ...queries.map(q => ({
       url: `https://www.reddit.com/search/?q=${encodeURIComponent(q)}&sort=new&t=day`,
     })),
+    // Recent posts from monitored subs so soft brand mentions don't depend on search hits
+    ...subreddits.map(sr => ({
+      url: `https://www.reddit.com/r/${sr}/new/?limit=50`,
+    })),
     ...subreddits.flatMap(sr =>
       subredditTerms.map(term => ({
         url: `https://www.reddit.com/r/${sr}/search/?q=${encodeURIComponent(term)}&restrict_sr=1&sort=new&t=week`,
@@ -113,6 +117,11 @@ async function fetchDirect(queries, subreddits, customThreads, operationalQuerie
       `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=new&t=day&limit=100`,
       `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=top&t=week&limit=25`,
     ]),
+    // Poll /new on configured subs so soft brand mentions become candidates even
+    // without a successful sitewide brand-search hit.
+    ...subreddits.map(sr =>
+      `https://www.reddit.com/r/${sr}/new.json?limit=50`
+    ),
     // Search each subreddit with brand word + context queries for broader topical coverage
     ...subreddits.flatMap(sr =>
       subredditSearchTerms.flatMap(term => [

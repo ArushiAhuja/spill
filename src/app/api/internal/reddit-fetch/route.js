@@ -92,6 +92,10 @@ export async function POST(request) {
     ...queries.map(q =>
       `https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=new&t=day&limit=100`
     ),
+    // Recent posts from monitored subreddits (soft brand mentions)
+    ...subreddits.map(sr =>
+      `https://www.reddit.com/r/${sr}/new.rss?limit=50`
+    ),
     // Subreddit search: brand word + context queries for topical coverage
     ...subreddits.flatMap(sr =>
       subredditTerms.map(term =>

@@ -6,19 +6,21 @@ export const DEFAULT_PROMPTS = {
   relevance_filter: {
     name: 'Relevance Filter',
     description: 'Criteria for deciding which posts are worth classifying. Applied before the classifier to drop noise early.',
-    content: `Include a post ONLY if it:
-- Directly mentions or is clearly about this company, its products, or its services
-- Discusses customer experience (positive or negative) with this company specifically
+    content: `Include a post if it:
+- Mentions this company's brand, products, executives, or parent company on an EXTERNAL source (third-party media, Reddit, news, review sites, competitor comparison)
+- Is an external opinion, press piece, or industry article about this company's brand, CEO, leadership, training programmes, or market position
+- Discusses customer experience (positive or negative) involving this company specifically
 - Covers operational failures — refunds, service quality, safety, delays, fraud — involving this company
-- Reports industry events, regulations, or competitor moves that would concern this company's leadership
+- Reports industry events, regulations, or competitor moves that clearly concern this company's leadership
 - Contains purchasing intent, reviews, or comparisons that involve this company
+- Arrived via a brand-name news/search query even if the publisher title is truncated (Google News often strips brand tokens)
 
-Exclude if:
-- The company name or keyword appears only incidentally or in an unrelated context
-- It's about a different company or industry with no connection to this one
-- It's generic content that happens to share a keyword but is about something else entirely
-- It's from a geography with no operational relevance to this company
-- It's personal or lifestyle content with no commercial signal`,
+EXCLUDE if:
+- It is SELF-PUBLISHED by this organisation — content on the company's own website/domain or official social accounts. Operators already know about their own posts; only third-party coverage matters.
+- The company name appears only incidentally in a post that is entirely about something unrelated
+- It is about a different company or industry with no connection to this one
+- It is generic content that happens to share a keyword but is not about this brand
+- It is personal or lifestyle content with no commercial or reputational signal`,
   },
 
   classifier_system: {
@@ -37,7 +39,7 @@ Exclude if:
 - virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
 
 Rules:
-- is_relevant: true ONLY if the post genuinely concerns this company's products, services, customers, or brand. Set false if the company appears incidentally or the post is about an unrelated topic. Apply learned exclusions strictly.
+- is_relevant: true if the post genuinely concerns this company's products, services, customers, brand, CEO, or market position AND is from an external entity. Set false if: (a) the post is self-published by this organisation on its own domain or official channel, (b) the company appears only incidentally, or (c) the post is about an unrelated topic. External press, opinion pieces, and third-party Reddit threads that name this company are relevant. Apply learned exclusions strictly.
 - category_id: best matching category ID from the list above. null if not relevant or no match.
 - response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
 - location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`,

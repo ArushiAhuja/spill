@@ -16,7 +16,7 @@ function getOpenAI() {
 
 // Industry keyword → relevant subreddits mapping
 const INDUSTRY_SUBREDDITS = {
-  aviation:    ['aviation', 'flying', 'india', 'IndianAviation', 'pilottraining', 'ATC'],
+  aviation:    ['aviation', 'flying', 'india', 'IndianAviation', 'pilottraining', 'ATC', 'CadetPilotProgram'],
   food:        ['india', 'bangalore', 'delhi', 'mumbai', 'FoodIndia', 'IndianFood'],
   fintech:     ['india', 'personalfinance', 'IndiaInvestments', 'startups'],
   ecommerce:   ['india', 'IndiaOnlineShopping', 'startups'],
