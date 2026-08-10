@@ -397,6 +397,23 @@ export async function ensureMigrations() {
   await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_created ON ai_traces(org_id, created_at DESC)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_ai_traces_org_external_decision ON ai_traces (org_id, source, (metadata->>'external_id'), decision)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_ai_observations_trace ON ai_observations(trace_id, created_at)`);
+  // Self-heal: reclaim scripts that used CREATE TABLE AS drop column DEFAULTs.
+  // Without id DEFAULT, override/feedback inserts fail with null id violations.
+  await query(`
+    DO $$ BEGIN
+      ALTER TABLE ai_observations ALTER COLUMN id SET DEFAULT gen_random_uuid();
+      ALTER TABLE ai_observations ALTER COLUMN kind SET DEFAULT 'agent';
+      ALTER TABLE ai_observations ALTER COLUMN created_at SET DEFAULT NOW();
+    EXCEPTION WHEN undefined_table THEN NULL;
+    END $$
+  `);
+  await query(`
+    DO $$ BEGIN
+      ALTER TABLE ai_traces ALTER COLUMN id SET DEFAULT gen_random_uuid();
+      ALTER TABLE ai_traces ALTER COLUMN created_at SET DEFAULT NOW();
+    EXCEPTION WHEN undefined_table THEN NULL;
+    END $$
+  `);
   await query(`
     CREATE TABLE IF NOT EXISTS signal_clusters (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

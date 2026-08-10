@@ -6,7 +6,8 @@ const { Pool } = pg;
 // Prefer the *session* pooler (port 5432) or direct host for migrations; Transaction
 // mode (6543) is fine for request-scoped queries but some session features differ.
 const connectionString = process.env.DATABASE_URL || 'postgresql://localhost/spill';
-const isRemote = /supabase\.co|neon\.tech|azure\.com|pooler\./i.test(connectionString);
+const isRemote = /supabase\.co|neon\.tech|azure\.com|postgres\.database\.azure\.com|pooler\./i.test(connectionString);
+
 
 const pool = new Pool({
   connectionString,

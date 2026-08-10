@@ -131,8 +131,17 @@ try {
           END IF;
         END $$
       `);
+      // CREATE TABLE AS does not preserve DEFAULTs — restore them or inserts break
+      await c.query(`
+        ALTER TABLE ai_observations
+          ALTER COLUMN id SET DEFAULT gen_random_uuid(),
+          ALTER COLUMN kind SET DEFAULT 'agent',
+          ALTER COLUMN created_at SET DEFAULT NOW()
+      `);
       await c.query('CREATE INDEX IF NOT EXISTS ai_observations_trace_id_idx ON ai_observations (trace_id)');
       await c.query('CREATE INDEX IF NOT EXISTS ai_observations_created_at_idx ON ai_observations (created_at)');
+      await c.query('CREATE INDEX IF NOT EXISTS idx_ai_observations_trace ON ai_observations(trace_id, created_at)');
+      await c.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_observations_span_key ON ai_observations(span_key)');
       await c.query('COMMIT');
       console.log('rebuilt ai_observations');
     } catch (e) {

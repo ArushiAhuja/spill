@@ -113,8 +113,8 @@ export async function createEventTrace({ orgId, post, quality, decision, decisio
       if (rawSize > 1500) input = keep;
     }
     await query(
-      `INSERT INTO ai_observations (trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error,span_key,prompt_snapshot,config_snapshot)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'spill_span_' || replace(gen_random_uuid()::text,'-',''),$13,$14)`,
+      `INSERT INTO ai_observations (id,trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error,span_key,prompt_snapshot,config_snapshot)
+       VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'spill_span_' || replace(gen_random_uuid()::text,'-',''),$13,$14)`,
       [trace.id, observation.name, observation.kind || 'agent', observation.model || null, observation.promptKey || null,
        observation.promptVersion || null, JSON.stringify(input || {}), JSON.stringify(observation.output || {}),
        observation.latencyMs || null, observation.inputTokens || null, observation.outputTokens || null, observation.error || null,
@@ -136,8 +136,8 @@ export async function linkTraceToPost(traceId, postId) {
 export async function recordTraceObservation(traceId, observation) {
   if (!traceId) return;
   await query(
-    `INSERT INTO ai_observations (trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error,span_key,prompt_snapshot,config_snapshot)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'spill_span_' || replace(gen_random_uuid()::text,'-',''),$13,$14)`,
+    `INSERT INTO ai_observations (id,trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error,span_key,prompt_snapshot,config_snapshot)
+     VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'spill_span_' || replace(gen_random_uuid()::text,'-',''),$13,$14)`,
     [traceId, observation.name, observation.kind || 'event', observation.model || null, observation.promptKey || null,
       observation.promptVersion || null, JSON.stringify(observation.input || {}), JSON.stringify(observation.output || {}),
      observation.latencyMs || null, observation.inputTokens || null, observation.outputTokens || null, observation.error || null,
