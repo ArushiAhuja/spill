@@ -18,7 +18,10 @@ import {
   textMentionsBrand,
   isSelfPublished,
   isBrandQueryPositive,
+  isExternalBrandMention,
+  stripHtmlNoise,
 } from './relevance-policy.js';
+import { lightStorageHygiene } from './storage-hygiene.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -305,9 +308,12 @@ export async function runOrgCycle(orgId) {
     console.log(`[org ${orgId}] fetched ${rawPosts.length} raw posts:`, JSON.stringify(bySource), JSON.stringify(fetchResult.diagnostics));
 
     // Drop self-published material (own site / official social) — operators already know it.
+    // Also strip HTML noise from bodies so brand matchers and agents see plain text.
     const externalRawPosts = [];
     let selfPublishedDropped = 0;
     for (const p of rawPosts) {
+      if (p.body) p.body = stripHtmlNoise(p.body);
+      if (p.title) p.title = stripHtmlNoise(p.title);
       if (isSelfPublished(p, org, sourceConfigs, intel)) {
         selfPublishedDropped++;
         continue;
@@ -362,6 +368,8 @@ export async function runOrgCycle(orgId) {
       if (containsExclusion(text)) return false;
       // Brand phrase / soft brand aliases (org name, parent names, intel keywords)
       if (containsBrand(text)) return true;
+      // Moniker + context (e.g. "Chimes" + admissions/pilot intent) counts as direct brand
+      if (isExternalBrandMention(p, brandTerms, org, sourceConfigs, intel)) return true;
       // Brand Google News / brand-query hits stay positive even if title was truncated
       if (isBrandQueryPositive(p, brandTerms, brandQueries)) return true;
       // Intel brand keywords (already covered by brandTerms; keep product keywords here)
@@ -423,6 +431,7 @@ export async function runOrgCycle(orgId) {
       : [];
 
     console.log(`[org ${orgId}] relevance: direct=${directPosts.length} (t1=${tier1.length} t2=${tier2.length}) tier3_candidates=${tier3Candidates.length} tier3_passed=${tier3Filtered.length}`);
+
 
     // Dedupe all candidates together against existing DB posts
     const seen = new Set();
@@ -495,6 +504,11 @@ export async function runOrgCycle(orgId) {
     const qualityThreshold = Math.max(0, Math.min(100, Number(process.env.SIGNAL_QUALITY_THRESHOLD || 20)));
     const classified = [];
     for (const post of allClassified) {
+      // Flag explicit third-party brand hits so quality gate does not zero them out
+      // just because dimension scores are low (common for short admissions posts).
+      if (isExternalBrandMention(post, brandTerms, org, sourceConfigs, intel)) {
+        post.external_brand_mention = true;
+      }
       const quality = signalQuality(post);
       post.signal_quality = quality;
       const decision = post.is_relevant === false ? 'rejected_irrelevant'
@@ -542,7 +556,14 @@ export async function runOrgCycle(orgId) {
           promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance' : null,
           promptVersion: post._relevance_trace?.prompt?.version ?? (post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null),
         input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', prompt_id: post._relevance_trace?.prompt?.id || null, prompt_hash: post._relevance_trace?.promptHash || null, source_agent_config_version: sourceAgentConfig.version, source_agent_policy: buildAgentPolicyContext(sourceAgentConfig), agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
-          output: { is_relevant: post.is_relevant !== false }, latencyMs: 0,
+          output: {
+            is_relevant: post.is_relevant !== false,
+            tier: post.relevance_tier || null,
+            external_brand_mention: !!post.external_brand_mention,
+            brand_moniker_policy: post.external_brand_mention
+              ? 'explicit external brand (or moniker + context) forced keep'
+              : null,
+          }, latencyMs: 0,
           promptSnapshot: post._relevance_trace ? { id: post._relevance_trace.prompt.id, hash: post._relevance_trace.promptHash, content: post._relevance_trace.promptSnapshot } : null,
         }, {
           name: 'Category Detection Agent', kind: 'agent',
@@ -735,6 +756,11 @@ ${post.url ? `<p><a href="${post.url}">View post</a></p>` : ''}
     // users submit multiple pieces of feedback in the same session.
     updateOrgIntelligence(orgId).catch(err =>
       console.warn(`[org ${orgId}] intelligence update error:`, err.message)
+    );
+
+    // Prevent Neon free-tier fill from rejected-observation bloat
+    lightStorageHygiene().catch(err =>
+      console.warn(`[org ${orgId}] storage hygiene:`, err.message)
     );
 
     console.log(`[org ${orgId}] cycle done: ${storedPosts} stored, ${escalated.length} escalated`);

@@ -3,6 +3,7 @@ import { query } from './db.js';
 import { getOrganizationAgentConfig, saveOrganizationAgentConfig } from './organization-agent-config.js';
 import { syncFeedbackAssessment, syncImprovementRecommendation } from './event-intelligence.js';
 import { invalidateOrganizationAgentBriefing } from './organization-intelligence.js';
+import { buildKeepRuleFromPost, primaryBrandMoniker } from './relevance-policy.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -313,6 +314,20 @@ export async function orchestrateFeedbackLearning({
     });
   }
 
+  // Positive surface feedback also writes hard keep policy (dashboard feedback path)
+  let hard_policy = null;
+  if (label === 'should_have_surfaced' || label === 'missed_context' || label === 'high_signal' || label === 'useful') {
+    hard_policy = await absorbFeedbackIntoKeepPolicy({
+      orgId,
+      post,
+      label,
+      explanation,
+      authorEmail,
+      feedbackId,
+      eventId,
+    }).catch((err) => ({ applied: false, reason: err.message }));
+  }
+
   if (forceIntel) {
     await updateOrgIntelligence(orgId, { force: true }).catch((err) => {
       console.warn('[feedback] intelligence compile skipped:', err.message);
@@ -325,6 +340,7 @@ export async function orchestrateFeedbackLearning({
     agents: agentList,
     evaluation_cases: evaluationCases,
     learning_by_agent: learningByAgent,
+    hard_policy,
   };
 }
 
@@ -332,6 +348,10 @@ export async function orchestrateFeedbackLearning({
 // suppressed a candidate that should appear on the dashboard. This orchestrates
 // immediate learning for the relevant agents, evaluation-case creation, and a
 // forced intelligence recompile so the next refresh can use the correction.
+//
+// Critical: soft few-shot alone is not enough (models still reject brand monikers).
+// We also write deterministic learnedKeepRules into intel_profile so policy
+// always surfaces matching third-party brand posts without asking the LLM.
 export async function orchestrateOverrideLearning({
   orgId,
   post,
@@ -349,8 +369,8 @@ export async function orchestrateOverrideLearning({
   const label = 'should_have_surfaced';
   const agents = agentsForFeedbackLabel(label, { previousDecision });
   const resultingAdjustment = previousDecision === 'rejected_irrelevant'
-    ? 'override surfaced rejected candidate; relevance/quality examples updated immediately'
-    : 'override surfaced suppressed candidate; quality/relevance examples updated immediately';
+    ? 'override surfaced rejected candidate; relevance/quality examples + keep rules updated'
+    : 'override surfaced suppressed candidate; quality/relevance examples + keep rules updated';
 
   const { rows: [feedback] } = await query(
     `INSERT INTO post_feedback (
@@ -371,6 +391,17 @@ export async function orchestrateOverrideLearning({
     ]
   );
 
+  // Hard deterministic learning first — survives LLM stubbornness and DB prune.
+  const hardLearning = await absorbFeedbackIntoKeepPolicy({
+    orgId,
+    post,
+    label,
+    explanation,
+    authorEmail: authorEmail || 'internal-operator',
+    feedbackId: feedback.id,
+    eventId: stableEventId,
+  });
+
   const learning = await orchestrateFeedbackLearning({
     orgId,
     feedbackId: feedback.id,
@@ -388,10 +419,109 @@ export async function orchestrateOverrideLearning({
 
   return {
     ...learning,
+    hard_policy: hardLearning,
     explanation,
     resulting_adjustment: resultingAdjustment,
   };
 }
+
+/**
+ * Persist a deterministic keep rule + relevance priority line from feedback/override
+ * so the next pipeline run cannot re-reject the same (or similar) brand mention.
+ */
+export async function absorbFeedbackIntoKeepPolicy({
+  orgId,
+  post,
+  label,
+  explanation = '',
+  authorEmail = null,
+  feedbackId = null,
+  eventId = null,
+}) {
+  if (!orgId || !post) return { applied: false, reason: 'missing org or post' };
+  if (NEGATIVE_LABELS.has(label)) return { applied: false, reason: 'negative label skips keep policy' };
+  if (!POSITIVE_LABELS.has(label) && label !== 'should_have_surfaced') {
+    return { applied: false, reason: 'label not a surface signal' };
+  }
+
+  const { rows: [orgRow] } = await query(
+    'SELECT id, name, website, intel_profile FROM organizations WHERE id=$1',
+    [orgId]
+  );
+  if (!orgRow) return { applied: false, reason: 'org not found' };
+
+  const intel = { ...(orgRow.intel_profile || {}) };
+  const rule = buildKeepRuleFromPost({
+    post,
+    org: orgRow,
+    note: explanation,
+  });
+  rule.feedback_id = feedbackId || null;
+
+  const existing = Array.isArray(intel.learnedKeepRules) ? intel.learnedKeepRules : [];
+  // Dedupe by exact_title + moniker fingerprint
+  const fingerprint = `${String(rule.exact_title || '').toLowerCase()}|${rule.moniker || ''}|${(rule.requires || []).join(',')}`;
+  const withoutDup = existing.filter((item) => {
+    const fp = `${String(item.exact_title || '').toLowerCase()}|${item.moniker || ''}|${(item.requires || []).join(',')}`;
+    return fp !== fingerprint;
+  });
+  const nextRules = [rule, ...withoutDup].slice(0, 40);
+
+  const boosts = new Set((intel.boostTerms || []).map(t => String(t).toLowerCase()));
+  if (rule.phrase) boosts.add(rule.phrase);
+  if (rule.moniker && rule.requires?.length) boosts.add(`${rule.moniker} (${rule.requires.slice(0, 3).join('/')})`);
+  const moniker = primaryBrandMoniker(orgRow.name);
+  if (moniker) boosts.add(moniker);
+
+  const nextIntel = {
+    ...intel,
+    learnedKeepRules: nextRules,
+    boostTerms: [...boosts].slice(0, 20),
+    feedbackUpdatedAt: new Date().toISOString(),
+  };
+
+  await query(
+    'UPDATE organizations SET intel_profile=$1, updated_at=NOW() WHERE id=$2',
+    [JSON.stringify(nextIntel), orgId]
+  );
+
+  // Strengthen relevance agent priority_instructions with a durable policy line
+  const config = await getOrganizationAgentConfig(orgId, 'relevance');
+  const keepLine = `OVERRIDE-LEARNED KEEP: treat posts like "${compactText(post.title, 80)}" (and similar ${moniker || 'brand'} + admissions/aviation context) as relevant. Operator said: ${compactText(explanation, 160)}`;
+  let priority = String(config.priority_instructions || '').trim();
+  if (!priority.includes(compactText(post.title, 60))) {
+    priority = [keepLine, priority].filter(Boolean).join('\n').slice(0, 8000);
+    await saveOrganizationAgentConfig(
+      orgId,
+      'relevance',
+      { priority_instructions: priority },
+      authorEmail || 'spill-feedback-learning',
+      `Override learning: keep rule for "${compactText(post.title, 80)}"`
+    );
+  }
+
+  if (feedbackId && eventId) {
+    await recordLearningAction({
+      orgId,
+      feedbackId,
+      eventId,
+      agentName: 'relevance',
+      actionType: 'keep_rule',
+      before: { keep_rule_count: existing.length },
+      after: { keep_rule_count: nextRules.length, rule },
+      reason: explanation || 'Wrote deterministic keep rule from operator override.',
+    }).catch(() => {});
+  }
+
+  invalidateOrganizationAgentBriefing(orgId);
+  return {
+    applied: true,
+    keep_rule: rule,
+    keep_rule_count: nextRules.length,
+    boost_terms: nextIntel.boostTerms,
+  };
+}
+
 
 // Returns a concise, deduplicated context string (~200 tokens) for injection into
 // classifier and relevance filter prompts each refresh cycle.
@@ -449,7 +579,20 @@ export async function getOrgFeedbackContext(orgId) {
       }
     }
 
-    if (!feedbackResult.rows.length) return lines.length ? lines.join('\n') : null;
+    // Always inject a brand keep rule first so soft few-shot can't override it.
+    lines.unshift(
+      'ALWAYS KEEP: third-party posts that name this organisation (full brand, short moniker with admissions/training/aviation context, programme codes, or product names). Never mark those is_relevant=false. Church-bell/homonym uses of a moniker without industry context stay excluded.'
+    );
+
+    if (Array.isArray(intel.learnedKeepRules) && intel.learnedKeepRules.length) {
+      const keepBrief = intel.learnedKeepRules.slice(0, 8).map((r) => {
+        const bits = [r.exact_title ? `title~"${String(r.exact_title).slice(0, 40)}"` : null, r.moniker, (r.requires || []).slice(0, 3).join('+')].filter(Boolean);
+        return bits.join(' / ');
+      }).filter(Boolean);
+      if (keepBrief.length) lines.push(`Hard keep rules from operator overrides: ${keepBrief.join('; ')}`);
+    }
+
+    if (!feedbackResult.rows.length) return lines.join('\n');
 
     // 3. Explicit + implicit feedback patterns, deduplicated
     const patternMap = new Map();
@@ -477,7 +620,7 @@ export async function getOrgFeedbackContext(orgId) {
       }
     }
 
-    return lines.length ? lines.join('\n') : null;
+    return lines.join('\n');
   } catch {
     return null;
   }
@@ -647,7 +790,13 @@ Rules:
 
     const newBoosts = Array.isArray(parsed.boost)
       ? [...new Set(parsed.boost.filter(t => typeof t === 'string' && t.trim().length >= 3).map(t => t.toLowerCase().trim()))].slice(0, 15)
-      : (intel.boostTerms || []);
+      : [];
+    // Preserve operator-learned boosts / moniker hints (replace would wipe override learning)
+    const keepBoosts = [
+      ...(intel.boostTerms || []),
+      ...((intel.learnedKeepRules || []).flatMap(r => [r.phrase, r.moniker].filter(Boolean))),
+    ].map(t => String(t).toLowerCase().trim()).filter(t => t.length >= 3);
+    const mergedBoosts = [...new Set([...newBoosts, ...keepBoosts])].slice(0, 20);
 
     const newTypicalComplaints = Array.isArray(parsed.typicalComplaints)
       ? [...new Set(parsed.typicalComplaints.filter(t => typeof t === 'string' && t.trim().length >= 5).map(t => t.trim()))].slice(0, 15)
@@ -711,7 +860,7 @@ Rules:
       `UPDATE organizations SET intel_profile = COALESCE(intel_profile, '{}')::jsonb || $1::jsonb WHERE id = $2`,
       [JSON.stringify({
         exclusionTerms: newExclusions,
-        boostTerms: newBoosts,
+        boostTerms: mergedBoosts,
         typicalComplaints: newTypicalComplaints,
         overEscalationPatterns,
         underEscalationPatterns,
@@ -719,7 +868,7 @@ Rules:
       }), orgId]
     );
 
-    console.log(`[feedback] org ${orgId} intelligence updated — exclusions: [${newExclusions.join(', ')}] | boosts: [${newBoosts.join(', ')}] | complaints: [${newTypicalComplaints.slice(0, 3).join(', ')}] | over-escalation: [${overEscalationPatterns.slice(0, 2).join(', ')}]`);
+    console.log(`[feedback] org ${orgId} intelligence updated — exclusions: [${newExclusions.join(', ')}] | boosts: [${mergedBoosts.join(', ')}] | complaints: [${newTypicalComplaints.slice(0, 3).join(', ')}] | over-escalation: [${overEscalationPatterns.slice(0, 2).join(', ')}]`);
   } catch (err) {
     console.warn('[feedback] intelligence update failed:', err.message);
   }

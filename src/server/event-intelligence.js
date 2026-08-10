@@ -155,12 +155,37 @@ export async function explainTrace({ trace, observations }) {
   } else if (decision === 'surfaced_override') {
     lines.push('Operator override forced this candidate onto the dashboard.');
   }
-  if (relevance) lines.push(`Relevance: ${relevance.output?.is_relevant === false ? 'excluded' : 'accepted'} via ${relevance.input?.tier || 'recorded policy'}.`);
+
+  // Per-agent outputs (what each said)
+  for (const obs of observations) {
+    const name = obs.name || obs.prompt_key || 'agent';
+    const out = obs.output || {};
+    const bits = [];
+    if (out.is_relevant === false) bits.push('not relevant');
+    else if (out.is_relevant === true) bits.push('relevant');
+    if (out.category) bits.push(`category ${out.category}`);
+    if (out.reasoning) bits.push(String(out.reasoning).slice(0, 180));
+    if (out.reason) bits.push(String(out.reason).slice(0, 180));
+    if (out.escalation_score != null) bits.push(`escalation ${out.escalation_score}`);
+    if (out.score != null) bits.push(`quality ${out.score}${out.threshold != null ? `/${out.threshold}` : ''}`);
+    if (bits.length) lines.push(`${name}: ${bits.join('; ')}.`);
+  }
+
+  if (relevance) lines.push(`Relevance gate: ${relevance.output?.is_relevant === false ? 'excluded' : 'accepted'} via ${relevance.input?.tier || evidence?.relevance?.tier || 'recorded policy'}.`);
   if (category?.output?.category) lines.push(`Category: ${category.output.category}${category.output.confidence != null ? ` (${Math.round(Number(category.output.confidence) * 100)}% confidence)` : ''}.`);
   if (severity?.output?.escalation_score != null) lines.push(`Escalation score: ${severity.output.escalation_score}${severity.output.escalated ? ' (escalated)' : ''}.`);
-  if (quality?.output?.score != null) lines.push(`Signal quality: ${quality.output.score}/${quality.input?.threshold ?? 0} threshold.`);
-  if (evidence?.category?.reasoning) lines.push(`Reasoning: ${evidence.category.reasoning}`);
+  if (quality?.output?.score != null) lines.push(`Signal quality: ${quality.output.score}/${quality.input?.threshold ?? evidence?.quality_gate?.threshold ?? 0} threshold.`);
+  if (evidence?.category?.reasoning) lines.push(`Classifier evidence: ${evidence.category.reasoning}`);
   if (evidence?.override?.previous_decision) lines.push(`Previously ${evidence.override.previous_decision}; overridden by operator.`);
+
+  if (decision === 'rejected_irrelevant') {
+    lines.push('Final reason: is_relevant=false — post never reached a dashboard keep decision.');
+  } else if (decision === 'suppressed_low_quality') {
+    lines.push('Final reason: relevant but quality score below threshold.');
+  } else if (decision === 'surfaced' || decision === 'surfaced_override') {
+    lines.push('Final reason: passed gates (or operator override).');
+  }
+
   if (!lines.length) lines.push('The trace has no agent observations yet; inspect the stored source and decision metadata.');
   const [correctness, improvementsResult] = await Promise.all([
     getEventAssessmentSummary({ orgId: trace.org_id, eventId: trace.event_id }),

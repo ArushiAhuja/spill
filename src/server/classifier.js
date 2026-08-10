@@ -1,6 +1,11 @@
 import OpenAI from 'openai';
 import { composePrompt } from './prompt-composer.js';
 import { buildAgentPolicyContext } from './organization-agent-config.js';
+import {
+  buildBrandTerms,
+  isExternalBrandMention,
+} from './relevance-policy.js';
+
 
 let _openai = null;
 function getOpenAI() {
@@ -196,11 +201,15 @@ Rules:
     // be truncated by the publisher feed).
     // Tier-2 posts (operational keyword match) always have intel keywords so they pass through.
     const brandQueryHit = post.brand_query_hit === true || post.query_brand_positive === true;
+    const brandTermsForGuard = organization ? buildBrandTerms(organization, intel || {}) : [];
     if (cls.is_relevant !== false && brandPattern && !brandQueryHit) {
       const postText = `${post.title || ''} ${post.body || ''}`;
       const hasBrand = brandPattern.test(postText);
       const hasIntelKw = intelKws.some(kw => postText.toLowerCase().includes(kw));
-      if (!hasBrand && !hasIntelKw) {
+      const hasExternalBrand = organization
+        ? isExternalBrandMention(post, brandTermsForGuard, organization, sourceConfigs, intel || {})
+        : false;
+      if (!hasBrand && !hasIntelKw && !hasExternalBrand) {
         cls.is_relevant = false;
       }
     }
@@ -212,6 +221,18 @@ Rules:
       if (softBrand || (post.title_enriched && postText.length > 20)) {
         cls.is_relevant = true;
         cls.reasoning = (cls.reasoning ? cls.reasoning + ' ' : '') + 'Kept: brand news query hit with external source.';
+      }
+    }
+
+    // Hard override: third-party posts that explicitly name this brand (including
+    // moniker + aviation/admissions co-signals) must never be LLM-rejected as
+    // irrelevant. Past feedback learning softens the model but does not replace
+    // this policy — e.g. "Chimes" + "I've applied" on CadetPilot.
+    if (cls.is_relevant === false && organization) {
+      if (isExternalBrandMention(post, brandTermsForGuard, organization, sourceConfigs, intel || {})) {
+        cls.is_relevant = true;
+        cls.reasoning = (cls.reasoning ? cls.reasoning + ' ' : '')
+          + 'Kept: explicit external brand mention (deterministic policy override).';
       }
     }
 

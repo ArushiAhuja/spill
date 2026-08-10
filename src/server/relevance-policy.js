@@ -27,6 +27,47 @@ export function brandKeyword(orgName) {
   return words.sort((a, b) => b.length - a.length)[0] || null;
 }
 
+/**
+ * First distinctive token of a multi-word org name (e.g. "chimes" from
+ * "Chimes Aviation Academy"). Alone it is homonym-risky; only use via
+ * contextualBrandMatch / isExternalBrandMention with co-signals.
+ */
+export function primaryBrandMoniker(orgName) {
+  const words = (orgName || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  const significant = words.filter(w => w.length >= 5 && !SKIP_PREFIXES.has(w));
+  // Only monikers from multi-word brands — single-word brands are already in brandKeyword.
+  if (words.filter(w => w.length >= 3 && !SKIP_PREFIXES.has(w)).length < 2) return null;
+  return significant[0] || null;
+}
+
+/** Strip Reddit/HTML noise so brand matchers and agents see readable text. */
+export function stripHtmlNoise(text = '') {
+  return String(text || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const GENERIC_INTENT_SIGNALS = [
+  'applied', 'application', 'admission', 'admissions', 'enroll', 'enrolment', 'enrollment',
+  'batch', 'result', 'results', 'interview', 'waitlist', 'waiting',
+  'selection', 'intake', 'joining', 'fee', 'fees', 'campus', 'review',
+  'experience', 'got in', 'rejected', 'shortlist', 'counselling', 'counseling',
+  'icpp', 'icp', 'adapt', 'cadet', 'cpl', 'atpl', 'pilot', 'flying', 'aviation',
+  'academy', 'dgca', 'training', 'ground school', 'flight school',
+];
+
+/** Industry / training URLs and text signals that make a moniker brand-safe. */
+const INDUSTRY_URL_RE = /cadet|pilot|aviation|flying|dgca|igia|flight|cpl|atpl|academy|admission|icpp|ground.?school|flight.?school/i;
+const INDUSTRY_TEXT_RE = /\b(aviation|pilot|cadet|flying|flight school|ground school|dgca|cpl|atpl|icpp|admission|admissions|academy)\b/i;
+
 export function normalizeHostname(raw) {
   if (!raw) return null;
   try {
@@ -68,11 +109,167 @@ export function buildBrandTerms({ name, website }, intel = {}) {
 
 export function textMentionsBrand(text, brandTerms = []) {
   if (!text || !brandTerms.length) return false;
+  const cleaned = stripHtmlNoise(text);
   return brandTerms.some((term) => {
     if (!term || term.length < 3) return false;
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-    return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+    return new RegExp(`\\b${escaped}\\b`, 'i').test(cleaned);
   });
+}
+
+/**
+ * Co-signals that make a bare primary moniker ("Chimes") brand-safe rather
+ * than an English homonym ("the church bell chimes").
+ */
+export function brandContextSignals(org = {}, intel = {}, brandTerms = []) {
+  const signals = new Set();
+  const push = (v) => {
+    const t = String(v || '').toLowerCase().trim();
+    if (t && t.length >= 3) signals.add(t);
+  };
+  const nameWords = String(org.name || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/);
+  for (const w of nameWords) {
+    if (w.length >= 4 && !SKIP_PREFIXES.has(w)) push(w);
+  }
+  // Multi-word brand terms are strong cosignals when co-present with moniker
+  for (const term of brandTerms || []) {
+    if (term && term.includes(' ')) push(term);
+    else if (term && term.length >= 3) push(term);
+  }
+  for (const list of [
+    intel.brandKeywords,
+    intel.productKeywords,
+    intel.industryVocabulary,
+    intel.operationalRiskQueries,
+    intel.typicalComplaints,
+  ]) {
+    for (const item of list || []) push(item);
+  }
+  // Intention verbs for academy / admissions orgs
+  for (const g of GENERIC_INTENT_SIGNALS) signals.add(g);
+  return [...signals];
+}
+
+/**
+ * True when primary moniker appears with industry / product / admissions context
+ * (or on an aviation/training URL path), not as a naked English word.
+ */
+export function contextualBrandMonikerMatch(post = {}, org = {}, intel = {}, brandTerms = []) {
+  const moniker = primaryBrandMoniker(org.name);
+  if (!moniker) return false;
+  const blob = stripHtmlNoise(`${post.title || ''} ${post.body || ''} ${post.url || ''} ${post.publisher || ''}`);
+  const monikerRe = new RegExp(`\\b${moniker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+  if (!monikerRe.test(blob)) return false;
+
+  const hostRoot = normalizeHostname(org.website)?.split('.')[0] || '';
+  // Domain embeds moniker (chimesaviation) → brand site root backs moniker usage
+  const domainEmbeds = hostRoot && hostRoot.includes(moniker);
+  const title = stripHtmlNoise(post.title || '').toLowerCase();
+  const titleIsMoniker = title === moniker
+    || title === `${moniker}!`
+    || new RegExp(`^${moniker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[!?.…\\s]*$`, 'i').test(title);
+  const titleHasMoniker = monikerRe.test(title);
+  const titleLeadsWithMoniker = new RegExp(`^${moniker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(title);
+
+  const cosignals = brandContextSignals(org, intel, brandTerms)
+    .filter(s => s !== moniker && !s.startsWith(moniker + ' '));
+  const hasCosignal = cosignals.some((s) => {
+    if (s.length < 3) return false;
+    if (GENERIC_INTENT_SIGNALS.includes(s)) {
+      return blob.toLowerCase().includes(s);
+    }
+    const escaped = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    return new RegExp(escaped, 'i').test(blob);
+  });
+
+  const urlIndustry = INDUSTRY_URL_RE.test(post.url || '');
+  const textIndustry = INDUSTRY_TEXT_RE.test(blob);
+
+  if (hasCosignal) return true;
+  // Moniker on industry forum / aviation URL (any moniker in title or body)
+  if (urlIndustry) return true;
+  // Moniker + industry wording anywhere in post
+  if (textIndustry) return true;
+  if (domainEmbeds && (titleIsMoniker || titleLeadsWithMoniker || titleHasMoniker)) return true;
+  if ((titleIsMoniker || titleLeadsWithMoniker) && /appl|admiss|enroll|result|batch|wait|icpp|icp|\bcaa\b|feedback|review|fee|pilot|training/i.test(blob)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Deterministic keep rules written from operator overrides / feedback.
+ * These are policy, not LLM few-shot — they always win.
+ */
+export function matchesLearnedKeepRule(post = {}, intel = {}) {
+  const rules = Array.isArray(intel.learnedKeepRules) ? intel.learnedKeepRules : [];
+  if (!rules.length) return false;
+  const blob = stripHtmlNoise(`${post.title || ''} ${post.body || ''} ${post.url || ''}`).toLowerCase();
+  const title = stripHtmlNoise(post.title || '').toLowerCase();
+
+  for (const rule of rules) {
+    if (!rule || rule.active === false) continue;
+
+    if (rule.exact_title) {
+      const et = String(rule.exact_title).toLowerCase().trim();
+      if (et && title === et) return true;
+      // Soft match: title contains exact historical title (handles punctuation drift)
+      if (et.length >= 4 && title.includes(et)) return true;
+    }
+
+    if (rule.phrase) {
+      const phrase = String(rule.phrase).toLowerCase().trim();
+      if (phrase.length >= 3 && blob.includes(phrase)) {
+        const req = Array.isArray(rule.requires) ? rule.requires.map(r => String(r).toLowerCase()) : [];
+        if (!req.length || req.some(r => blob.includes(r))) return true;
+      }
+    }
+
+    if (rule.moniker) {
+      const m = String(rule.moniker).toLowerCase().trim();
+      if (m.length < 4) continue;
+      if (!new RegExp(`\\b${m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(blob)) continue;
+      const req = Array.isArray(rule.requires) ? rule.requires.map(r => String(r).toLowerCase()) : [];
+      const industry = INDUSTRY_URL_RE.test(post.url || '') || INDUSTRY_TEXT_RE.test(blob);
+      if (req.some(r => blob.includes(r))) return true;
+      if (rule.force_moniker && industry) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Build a keep-rule from an operator-surfaced post so the next cycle does not
+ * need the LLM to rediscover it.
+ */
+export function buildKeepRuleFromPost({ post = {}, org = {}, note = '' } = {}) {
+  const moniker = primaryBrandMoniker(org.name);
+  const blob = stripHtmlNoise(`${post.title || ''} ${post.body || ''}`);
+  const lower = blob.toLowerCase();
+  const requires = GENERIC_INTENT_SIGNALS.filter(s => s.length >= 4 && lower.includes(s)).slice(0, 8);
+  const title = stripHtmlNoise(post.title || '').slice(0, 200);
+  const rule = {
+    id: `keep_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    source: 'operator_override',
+    moniker: moniker || null,
+    phrase: null,
+    exact_title: title || null,
+    requires,
+    force_moniker: !!(moniker && (requires.length || INDUSTRY_URL_RE.test(post.url || '') || INDUSTRY_TEXT_RE.test(blob))),
+    note: String(note || '').slice(0, 300) || null,
+    sample_title: title || null,
+    created_at: new Date().toISOString(),
+    active: true,
+  };
+  // Also capture multi-word brand when present
+  const full = String(org.name || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+  if (full && lower.includes(full)) rule.phrase = full;
+  else if (moniker && lower.includes(moniker)) {
+    // secondary phrase from first two name words
+    const two = brandKeyword(org.name);
+    if (two && two.includes(' ') && lower.includes(two)) rule.phrase = two;
+  }
+  return rule;
 }
 
 export function collectOfficialHandles(org = {}, sourceConfigs = [], intel = {}) {
@@ -187,6 +384,8 @@ export function isBrandQueryPositive(post = {}, brandTerms = [], brandQueries = 
 
 export function isExternalBrandMention(post = {}, brandTerms = [], org = {}, sourceConfigs = [], intel = {}) {
   if (isSelfPublished(post, org, sourceConfigs, intel)) return false;
+  if (matchesLearnedKeepRule(post, intel)) return true;
   const text = `${post.title || ''} ${post.body || ''} ${post.publisher || ''}`;
-  return textMentionsBrand(text, brandTerms) || isBrandQueryPositive(post, brandTerms);
+  if (textMentionsBrand(text, brandTerms) || isBrandQueryPositive(post, brandTerms)) return true;
+  return contextualBrandMonikerMatch(post, org, intel, brandTerms);
 }

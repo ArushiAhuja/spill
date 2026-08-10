@@ -9,7 +9,8 @@ export function signalQuality(post, novelty = 1) {
   // External brand/press hits (especially brand-query Google News) should clear the
   // quality gate even when dimension scores are low/neutral — leadership still needs
   // to see third-party coverage of the brand / CEO.
-  const brandPress = post.brand_query_hit || post.query_brand_positive
+  // Same for explicit third-party brand admissions posts (moniker + apply/result).
+  const brandPress = post.brand_query_hit || post.query_brand_positive || post.external_brand_mention
     || /ceo|founder|op-?ed|opinion|press|interview/i.test(`${post.title || ''} ${post.body || ''}`);
   if (relevance && brandPress && impact < 0.35) {
     impact = 0.35;
@@ -48,37 +49,77 @@ export async function createEventTrace({ orgId, post, quality, decision, decisio
     if (existing) return existing;
   }
 
+  const isReject = decision === 'rejected_irrelevant' || decision === 'suppressed_low_quality';
+  // Rejects used to store full prompt snapshots + long bodies and blew Neon free tier
+  // (512MB). Keep decision + agent I/O summary only for rejects; full snapshots for keeps.
+  const metaBody = String(post.body || '').slice(0, isReject ? 400 : 8000);
+  const metaTitle = String(post.title || '').slice(0, 500);
+
   const { rows: [trace] } = await query(
     `INSERT INTO ai_traces (org_id, source, status, decision, quality, decision_evidence, metadata, trace_key)
      VALUES ($1,$2,'completed',$3,$4,$5,$6,'spill_trace_' || replace(gen_random_uuid()::text,'-','')) RETURNING id,trace_key,event_id`,
     [orgId, post.source || null, decision, JSON.stringify(quality), JSON.stringify(decisionEvidence), JSON.stringify({
       external_id: post.id,
-      title: post.title || '',
-      body: post.body || '',
+      title: metaTitle,
+      body: metaBody,
       url: post.url || null,
       author: post.author || null,
       engagement: post.score || 0,
       detected_query: post.detected_query || post.matched_query || null,
       brand_query_hit: !!(post.brand_query_hit || post.query_brand_positive),
+      external_brand_mention: !!post.external_brand_mention,
       prompt_versions: promptVersions,
     })]
   );
   const base = [{
     name: 'Source Processing Agent', kind: 'agent', model: sourceObservation?.model || null,
     promptKey: sourceObservation?.promptKey || null, promptVersion: sourceObservation?.promptVersion || null,
-    input: { source: post.source, detected_query: post.detected_query || null, raw_post: { title: post.title, body: post.body, url: post.url, author: post.author, engagement: post.score } },
-    output: { cleaned_customer_complaint: `${post.title || ''} ${post.body || ''}`.replace(/\s+/g, ' ').trim().slice(0, 1200) }, latencyMs: 0,
-    promptSnapshot: sourceObservation?.promptSnapshot || null,
+    input: {
+      source: post.source,
+      detected_query: post.detected_query || null,
+      raw_post: {
+        title: metaTitle,
+        body: metaBody,
+        url: post.url,
+        author: post.author,
+        engagement: post.score,
+      },
+    },
+    output: { cleaned_customer_complaint: `${metaTitle} ${metaBody}`.replace(/\s+/g, ' ').trim().slice(0, isReject ? 400 : 1200) }, latencyMs: 0,
+    promptSnapshot: isReject ? { key: 'source_understanding', version: sourceObservation?.promptVersion || null } : (sourceObservation?.promptSnapshot || null),
   }, ...observations];
   for (const observation of base) {
+    let snapshot = observation.promptSnapshot || (observation.promptKey ? {
+      key: observation.promptKey,
+      version: observation.promptVersion,
+      content: isReject ? null : (observation.input?.prompt_system || observation.input?.policy || null),
+    } : {});
+    if (isReject && snapshot && typeof snapshot === 'object') {
+      snapshot = { key: snapshot.key || observation.promptKey || null, version: snapshot.version || observation.promptVersion || null };
+    }
+    // Drop huge prompt text from inputs on reject paths
+    let input = observation.input || {};
+    if (isReject && input && typeof input === 'object') {
+      const keep = {
+        tier: input.tier, policy: typeof input.policy === 'string' ? input.policy.slice(0, 200) : undefined,
+        agent_config_version: input.agent_config_version,
+        category: input.category,
+        threshold: input.threshold,
+        prompt_id: input.prompt_id,
+        prompt_hash: input.prompt_hash,
+      };
+      // Prefer compact keep keys only when original was large
+      const rawSize = JSON.stringify(input).length;
+      if (rawSize > 1500) input = keep;
+    }
     await query(
       `INSERT INTO ai_observations (trace_id,name,kind,model,prompt_key,prompt_version,input,output,latency_ms,input_tokens,output_tokens,error,span_key,prompt_snapshot,config_snapshot)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'spill_span_' || replace(gen_random_uuid()::text,'-',''),$13,$14)`,
       [trace.id, observation.name, observation.kind || 'agent', observation.model || null, observation.promptKey || null,
-       observation.promptVersion || null, JSON.stringify(observation.input || {}), JSON.stringify(observation.output || {}),
+       observation.promptVersion || null, JSON.stringify(input || {}), JSON.stringify(observation.output || {}),
        observation.latencyMs || null, observation.inputTokens || null, observation.outputTokens || null, observation.error || null,
-       JSON.stringify(observation.promptSnapshot || (observation.promptKey ? { key: observation.promptKey, version: observation.promptVersion, content: observation.input?.prompt_system || observation.input?.policy || null } : {})),
-       JSON.stringify(observation.configSnapshot || (observation.input?.agent_policy ? { agent_policy: observation.input?.agent_policy, agent_config_version: observation.input?.agent_config_version ?? null } : {}))]
+       JSON.stringify(snapshot || {}),
+       JSON.stringify(isReject ? {} : (observation.configSnapshot || (observation.input?.agent_policy ? { agent_policy: observation.input?.agent_policy, agent_config_version: observation.input?.agent_config_version ?? null } : {})))]
     );
   }
   return trace.id;

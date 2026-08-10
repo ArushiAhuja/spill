@@ -39,7 +39,7 @@ async function sizeReport(label) {
     SELECT relname, pg_size_pretty(pg_total_relation_size(c.oid)) AS size
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind = 'r'
-    ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 5
+    ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 8
   `);
   console.log(label, rows);
 }
@@ -47,14 +47,15 @@ async function sizeReport(label) {
 try {
   await sizeReport('Before:');
   let obsDel = 0;
-  for (let i = 0; i < 40; i++) {
+  // Rejected/suppressed observations (post_id null)
+  for (let i = 0; i < 80; i++) {
     const r = await client.query(`
       DELETE FROM ai_observations WHERE id IN (
         SELECT o.id FROM ai_observations o
         JOIN ai_traces t ON t.id = o.trace_id
         WHERE t.decision IN ('rejected_irrelevant','suppressed_low_quality')
           AND t.post_id IS NULL
-        LIMIT 5000
+        LIMIT 8000
       )
     `);
     obsDel += r.rowCount;
@@ -62,8 +63,53 @@ try {
   }
   console.log('Deleted rejected observations:', obsDel);
 
+  // Old observations for any non-surfaced decision older than 14 days
+  let oldObs = 0;
+  for (let i = 0; i < 40; i++) {
+    const r = await client.query(`
+      DELETE FROM ai_observations WHERE id IN (
+        SELECT o.id FROM ai_observations o
+        JOIN ai_traces t ON t.id = o.trace_id
+        WHERE o.created_at < NOW() - INTERVAL '14 days'
+          AND t.decision NOT IN ('surfaced', 'surfaced_override')
+        LIMIT 5000
+      )
+    `);
+    oldObs += r.rowCount;
+    if (r.rowCount === 0) break;
+  }
+  console.log('Deleted old non-surfaced observations (>14d):', oldObs);
+
+  // Truncate bulky prompt snapshots on remaining non-surfaced traces (keep structure)
+  const snap = await client.query(`
+    UPDATE ai_observations o
+    SET prompt_snapshot = '{}'::jsonb,
+        input = CASE
+          WHEN pg_column_size(o.input) > 4000 THEN jsonb_build_object('trimmed', true)
+          ELSE o.input
+        END
+    FROM ai_traces t
+    WHERE o.trace_id = t.id
+      AND t.decision IN ('rejected_irrelevant','suppressed_low_quality')
+      AND t.post_id IS NULL
+      AND (pg_column_size(COALESCE(o.prompt_snapshot, '{}'::jsonb)) > 500 OR pg_column_size(COALESCE(o.input, '{}'::jsonb)) > 4000)
+  `);
+  console.log('Trimmed bulky reject observation payloads:', snap.rowCount);
+
+  // prompt_execution_debug if present
+  try {
+    const ped = await client.query(`
+      DELETE FROM prompt_execution_debug WHERE id IN (
+        SELECT id FROM prompt_execution_debug WHERE created_at < NOW() - INTERVAL '7 days' LIMIT 10000
+      )
+    `);
+    console.log('Deleted old prompt_execution_debug:', ped.rowCount);
+  } catch (e) {
+    console.log('prompt_execution_debug skip:', e.message);
+  }
+
   let traceDel = 0;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 40; i++) {
     const r = await client.query(`
       WITH ranked AS (
         SELECT id, ROW_NUMBER() OVER (
@@ -73,12 +119,29 @@ try {
         FROM ai_traces
         WHERE decision IN ('rejected_irrelevant','suppressed_low_quality') AND post_id IS NULL
       )
-      DELETE FROM ai_traces WHERE id IN (SELECT id FROM ranked WHERE rn > 1 LIMIT 3000)
+      DELETE FROM ai_traces WHERE id IN (SELECT id FROM ranked WHERE rn > 1 LIMIT 5000)
     `);
     traceDel += r.rowCount;
     if (r.rowCount === 0) break;
   }
   console.log('Deleted duplicate rejected traces:', traceDel);
+
+  // Drop rejected traces older than 30 days with no post (metadata-only noise)
+  let oldTraces = 0;
+  for (let i = 0; i < 20; i++) {
+    const r = await client.query(`
+      DELETE FROM ai_traces WHERE id IN (
+        SELECT id FROM ai_traces
+        WHERE decision IN ('rejected_irrelevant','suppressed_low_quality')
+          AND post_id IS NULL
+          AND created_at < NOW() - INTERVAL '30 days'
+        LIMIT 3000
+      )
+    `);
+    oldTraces += r.rowCount;
+    if (r.rowCount === 0) break;
+  }
+  console.log('Deleted old rejected traces (>30d):', oldTraces);
 
   try {
     await client.query('VACUUM ai_observations');
@@ -88,8 +151,7 @@ try {
   }
 
   await sizeReport('After:');
-  console.log('Done. If still over 512MB, export/drop prompt_execution_debug or upgrade Neon.');
-  console.log('Azure migration is optional and not required when pruning succeeds.');
+  console.log('Done. If still over 512MB, upgrade Neon storage.');
 } catch (e) {
   console.error(e.message);
   process.exitCode = 1;

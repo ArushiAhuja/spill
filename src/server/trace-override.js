@@ -40,12 +40,34 @@ export function extractCandidateFromTrace(trace, observations = []) {
   };
 }
 
+function formatAgentOutputSnippet(output) {
+  if (!output || typeof output !== 'object') return null;
+  const bits = [];
+  if (output.is_relevant === false) bits.push('said not relevant');
+  else if (output.is_relevant === true) bits.push('said relevant');
+  if (output.category) bits.push(`category=${output.category}`);
+  if (output.reasoning) bits.push(String(output.reasoning).slice(0, 220));
+  if (output.reason) bits.push(String(output.reason).slice(0, 220));
+  if (output.escalation_score != null) bits.push(`score=${output.escalation_score}`);
+  if (output.decision) bits.push(`decision=${output.decision}`);
+  if (output.score != null && output.threshold != null) bits.push(`quality ${output.score}/${output.threshold}`);
+  if (!bits.length) {
+    try {
+      const json = JSON.stringify(output);
+      if (json && json !== '{}') return json.slice(0, 200);
+    } catch { /* ignore */ }
+  }
+  return bits.length ? bits.join('; ') : null;
+}
+
 export function buildRejectionSummary(trace, observations = []) {
   const evidence = trace.decision_evidence || {};
   const decision = trace.decision || 'unknown';
   const relevanceObs = observations.find(item => item.prompt_key === 'relevance' || /relevance/i.test(item.name || ''));
   const qualityObs = observations.find(item => /signal quality/i.test(item.name || ''));
   const categoryObs = observations.find(item => item.prompt_key === 'category' || /category/i.test(item.name || ''));
+  const severityObs = observations.find(item => item.prompt_key === 'severity' || /severity/i.test(item.name || ''));
+  const sourceObs = observations.find(item => item.prompt_key === 'source_understanding' || /source/i.test(item.name || ''));
 
   const lines = [];
   if (decision === 'rejected_irrelevant') {
@@ -59,6 +81,22 @@ export function buildRejectionSummary(trace, observations = []) {
   } else {
     lines.push(`Spill decision: ${decision}.`);
   }
+
+  // Per-agent: what each recorded agent produced
+  const agentLines = [];
+  for (const obs of [
+    ['Source', sourceObs],
+    ['Relevance', relevanceObs],
+    ['Category', categoryObs],
+    ['Severity', severityObs],
+    ['Quality', qualityObs],
+  ]) {
+    const [label, obs] = obs;
+    if (!obs) continue;
+    const snippet = formatAgentOutputSnippet(obs.output);
+    if (snippet) agentLines.push(`${label} agent: ${snippet}.`);
+  }
+  lines.push(...agentLines);
 
   const relevance = evidence.relevance || {};
   if (relevance.is_relevant === false) {
@@ -79,10 +117,22 @@ export function buildRejectionSummary(trace, observations = []) {
   else if (categoryObs?.output?.reasoning) lines.push(`Classifier reasoning: ${categoryObs.output.reasoning}`);
   if (category.name) lines.push(`Suggested category: ${category.name}.`);
 
+  // Final: why this decision won (after agents + gates)
+  if (decision === 'rejected_irrelevant') {
+    lines.push('Final: candidate dropped because the relevance gate set is_relevant=false (category/quality not applied as a keep).');
+  } else if (decision === 'suppressed_low_quality') {
+    lines.push('Final: candidate was considered relevant but fell below the signal-quality threshold, so it was not shown on the dashboard.');
+  } else if (decision === 'surfaced_override') {
+    lines.push(`Final: operator override${evidence?.override?.note ? ` — ${String(evidence.override.note).slice(0, 200)}` : ''}.`);
+  } else if (decision === 'surfaced') {
+    lines.push('Final: passed relevance and quality gates.');
+  }
+
   return {
     decision,
     summary: lines.join(' '),
     lines,
+    agents: agentLines,
     relevance,
     quality_gate: qualityGate,
     category,

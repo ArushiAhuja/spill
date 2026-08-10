@@ -632,7 +632,7 @@ export async function ensureMigrations() {
       feedback_id UUID REFERENCES post_feedback(id) ON DELETE SET NULL,
       event_id UUID NOT NULL,
       agent_name TEXT NOT NULL,
-      action_type TEXT NOT NULL CHECK (action_type IN ('prompt_context','example_update','threshold_adjustment','category_refinement','evaluation_case')),
+      action_type TEXT NOT NULL CHECK (action_type IN ('prompt_context','example_update','threshold_adjustment','category_refinement','evaluation_case','keep_rule')),
       status TEXT NOT NULL DEFAULT 'applied' CHECK (status IN ('applied','skipped','pending','failed')),
       before_state JSONB NOT NULL DEFAULT '{}',
       after_state JSONB NOT NULL DEFAULT '{}',
@@ -641,6 +641,15 @@ export async function ensureMigrations() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_feedback_learning_actions_org ON feedback_learning_actions(org_id,created_at DESC)`);
+  // Expand allowed action types (CREATE TABLE IF NOT EXISTS won't update existing CHECK)
+  await query(`
+    DO $$ BEGIN
+      ALTER TABLE feedback_learning_actions DROP CONSTRAINT IF EXISTS feedback_learning_actions_action_type_check;
+      ALTER TABLE feedback_learning_actions ADD CONSTRAINT feedback_learning_actions_action_type_check
+        CHECK (action_type IN ('prompt_context','example_update','threshold_adjustment','category_refinement','evaluation_case','keep_rule'));
+    EXCEPTION WHEN others THEN NULL;
+    END $$
+  `);
 
   // Explainability V1: a trace retains structured evidence for its final
   // decision, while feedback produces agent-level correctness assessments and

@@ -4,7 +4,7 @@ import { buildOrganizationIntelligence, getOrganizationAgentBriefing, loadOrgani
 
 const BASE_IDENTITIES = {
   source_understanding: 'You are Spill\'s Source Understanding Agent. Preserve source truth and make only deterministic, explainable normalisation decisions.',
-  relevance: 'You are Spill\'s Relevance Agent. Minimise false positives: when the relationship to the monitored organisation is unclear, exclude the signal.',
+  relevance: 'You are Spill\'s Relevance Agent. Include posts that name the monitored organisation (full brand or short moniker with admissions, aviation, training, product, or customer-experience context). Exclude only true homonyms with no industry context, self-published official posts, and posts about unrelated companies. When in doubt on a clear brand moniker in industry context, INCLUDE.',
   category: 'You are Spill\'s Category Classification Agent. Classify only from supplied evidence and follow the required structured output exactly.',
   severity: 'You are Spill\'s Severity Agent. Apply the supplied scoring policy consistently; do not invent impact, urgency, or reach.',
   summary: 'You are Spill\'s Executive Summary Agent. State the operational signal accurately and concisely, without unsupported causality.',

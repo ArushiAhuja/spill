@@ -16,12 +16,21 @@ function normalize(child) {
   const d = child.data ?? child;
   const ts = d.created_utc ?? 0;
   const created_at = d.created_at ? new Date(d.created_at) : new Date(ts * 1000);
+  const rawBody = d.selftext ?? d.body ?? '';
+  // Reddit often embeds HTML markdown wrappers; strip so brand matchers see plain text
+  const body = String(rawBody)
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
   return {
     id: d.id?.startsWith('reddit_') ? d.id : `reddit_${d.id}`,
     source: 'reddit',
     author: d.author ?? 'unknown',
     title: d.title ?? '',
-    body: d.selftext ?? d.body ?? '',
+    body,
     url: d.url ?? (d.permalink
       ? `https://www.reddit.com${d.permalink}`
       : `https://www.reddit.com/r/${d.subreddit}/comments/${d.id}/`),

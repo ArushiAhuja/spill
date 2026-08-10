@@ -36,6 +36,71 @@ assert.strictEqual(
   'homonym "chimes" alone must not match soft brand terms'
 );
 
+// Contextual moniker: bare "Chimes" + admissions/apply signal is brand-relevant
+assert.ok(policy.contextualBrandMonikerMatch(
+  {
+    title: 'Chimes',
+    body: "I've applied for Chimes.waiting for results",
+    url: 'https://www.reddit.com/r/CadetPilotProgram/comments/1vio4ji/chimes/',
+  },
+  org, intel, terms
+), 'admission post titled Chimes on CadetPilot should match moniker+context');
+
+assert.ok(isExternalBrandMention(
+  {
+    title: 'Chimes',
+    body: "I've applied for Chimes.waiting for results",
+    url: 'https://www.reddit.com/r/CadetPilotProgram/comments/1vio4ji/chimes/',
+    author: 'some_cadet',
+  },
+  terms, org, [], intel
+), 'external Chimes admissions post must count as external brand mention');
+
+assert.ok(!policy.contextualBrandMonikerMatch(
+  { title: 'Bells of Notre Dame', body: 'The church bell chimes every hour', url: 'https://example.com/bells' },
+  org, intel, terms
+), 'homonym chimes without aviation context must not match');
+
+assert.ok(isExternalBrandMention(
+  {
+    title: 'How to apply for Chimes?',
+    body: 'Need guidance on ICPP ADAPT for CAA',
+    url: 'https://www.reddit.com/r/CadetPilotProgram/comments/abc/how_to_apply_for_chimes/',
+  },
+  terms, org, [], intel
+), 'How to apply for Chimes should match');
+
+// Learned keep rule from operator override
+const learnedIntel = {
+  ...intel,
+  learnedKeepRules: [
+    policy.buildKeepRuleFromPost({
+      post: {
+        title: 'Chimes!!!!',
+        body: 'any updates on results?',
+        url: 'https://www.reddit.com/r/CadetPilotProgram/comments/x/chimes/',
+      },
+      org,
+      note: 'operator override',
+    }),
+  ],
+};
+assert.ok(
+  policy.matchesLearnedKeepRule(
+    { title: 'Chimes!!!!', body: 'any updates on results?', url: 'https://reddit.com/r/CadetPilotProgram/x' },
+    learnedIntel
+  ),
+  'learned keep rule should match same-style admissions post'
+);
+assert.ok(
+  isExternalBrandMention(
+    { title: 'Chimes!!!!', body: 'any updates on results?', url: 'https://reddit.com/r/CadetPilotProgram/x' },
+    terms, org, [], learnedIntel
+  ),
+  'external mention must respect learned keep rules'
+);
+
+
 assert.ok(isSelfPublished(
   { url: 'https://www.chimesaviation.com/blog/ceo-note', title: 'CEO note', author: 'admin' },
   org, [], intel
