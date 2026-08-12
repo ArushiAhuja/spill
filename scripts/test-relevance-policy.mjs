@@ -70,6 +70,21 @@ assert.ok(isExternalBrandMention(
   terms, org, [], intel
 ), 'How to apply for Chimes should match');
 
+// HTML-entity-encoded Reddit body + ICP13 title (production failure mode)
+assert.ok(isExternalBrandMention(
+  {
+    title: 'Chimes Icp13- Adapt dates',
+    body: '&lt;!-- SC_OFF --&gt;&lt;div class=&quot;md&quot;&gt;&lt;p&gt;ADAPT assessment dates are from 12–25 August, but does anyone know what is the latest ADAPT date that has been allotted so far to fresh applicants??&lt;/p&gt; &lt;/div&gt;&lt;!-- SC_ON --&gt;',
+    url: 'https://www.reddit.com/r/indianaviation/comments/1vm7xbb/chimes_icp13_a',
+  },
+  terms, org, [], { ...intel, brandKeywords: [...intel.brandKeywords, 'ICPP', 'ICP'] }
+), 'HTML-encoded Chimes Icp13 ADAPT post must match');
+
+assert.ok(
+  policy.stripHtmlNoise('&lt;p&gt;ADAPT dates&lt;/p&gt;').includes('ADAPT dates'),
+  'stripHtmlNoise must decode entities before stripping tags'
+);
+
 // Learned keep rule from operator override
 const learnedIntel = {
   ...intel,

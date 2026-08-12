@@ -1,6 +1,7 @@
 import { query } from './db.js';
 import { linkTraceToPost, recordTraceObservation } from './observability.js';
 import { orchestrateOverrideLearning } from './feedback.js';
+import { stripHtmlNoise } from './relevance-policy.js';
 
 export function extractCandidateFromTrace(trace, observations = []) {
   const meta = trace?.metadata || {};
@@ -23,8 +24,8 @@ export function extractCandidateFromTrace(trace, observations = []) {
     }
   }
   raw = raw || {};
-  const title = trace?.title || meta.title || raw.title || raw.headline || 'Operator-surfaced signal';
-  const body = trace?.body || meta.body || meta.text || raw.body || raw.text || raw.content || raw.description || '';
+  const title = stripHtmlNoise(trace?.title || meta.title || raw.title || raw.headline || 'Operator-surfaced signal');
+  const body = stripHtmlNoise(trace?.body || meta.body || meta.text || raw.body || raw.text || raw.content || raw.description || '');
   const url = trace?.url || meta.url || raw.url || raw.link || null;
   const author = meta.author || raw.author || null;
   const engagement = Number(meta.engagement ?? raw.engagement ?? raw.score ?? 0) || 0;
@@ -36,7 +37,9 @@ export function extractCandidateFromTrace(trace, observations = []) {
     author,
     engagement,
     external_id: String(externalId).slice(0, 500),
-    source: trace.source || meta.source || 'manual_override',
+    source: (trace.source || meta.source || 'reddit') === 'manual_override'
+      ? 'reddit'
+      : (trace.source || meta.source || 'reddit'),
   };
 }
 
@@ -167,11 +170,29 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
   }
 
   const overrideNote = String(note || '').trim().slice(0, 1000);
-  const reasoning = [
-    'Operator override: forced onto dashboard from internal intelligence.',
-    overrideNote ? `Note: ${overrideNote}` : null,
-    trace.decision_evidence?.category?.reasoning || null,
-  ].filter(Boolean).join(' ');
+  // Look like a normal dashboard post — not a forced "escalated/saved" highlight.
+  // Prefer the classifier's own reasoning; fall back to a short neutral summary.
+  const categoryReasoning = trace.decision_evidence?.category?.reasoning || null;
+  const categoryName = trace.decision_evidence?.category?.name || null;
+  const reasoning = categoryReasoning
+    || (categoryName ? `Related to ${categoryName}.` : null)
+    || (overrideNote ? overrideNote.slice(0, 280) : 'Relevant organisation signal surfaced from monitoring.');
+  const escalationScore = Math.min(
+    100,
+    Math.max(
+      Number(trace.decision_evidence?.severity?.escalation_score) || 0,
+      Number(trace.quality?.score) || 0,
+      35,
+    ),
+  );
+  const shouldEscalate = escalationScore >= (Number(process.env.ESCALATE_THRESHOLD) || 60);
+  const qualityPayload = {
+    score: Math.max(Number(trace.quality?.score) || 0, 35),
+    relevance: 1,
+    confidence: Number(trace.quality?.confidence) || 0.7,
+    impact: Number(trace.quality?.impact) || 0.35,
+    novelty: Number(trace.quality?.novelty) || 1,
+  };
 
   let postId = trace.post_id;
   if (postId) {
@@ -182,16 +203,16 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
          url = COALESCE($4, url),
          author = COALESCE($5, author),
          reasoning = $6,
-         escalated = true,
-         manually_escalated = true,
-         reviewed = true,
+         escalation_score = GREATEST(COALESCE(escalation_score, 0), $7),
+         escalated = CASE WHEN $8 THEN true ELSE escalated END,
+         manually_escalated = false,
+         reviewed = false,
          post_status = COALESCE(NULLIF(post_status,''), 'unread'),
          dismiss_reason = NULL,
          snoozed_until = NULL,
-         saved_at = COALESCE(saved_at, NOW()),
-         ai_trace_id = $7,
-         signal_quality = COALESCE(signal_quality, $8::jsonb)
-       WHERE id = $1 AND org_id = $9`,
+         ai_trace_id = $9,
+         signal_quality = COALESCE(signal_quality, $10::jsonb)
+       WHERE id = $1 AND org_id = $11`,
       [
         postId,
         candidate.title,
@@ -199,8 +220,10 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
         candidate.url,
         candidate.author,
         reasoning,
+        escalationScore,
+        shouldEscalate,
         trace.id,
-        JSON.stringify(trace.quality || { score: 100, relevance: 1, confidence: 1, impact: 1, novelty: 1 }),
+        JSON.stringify(qualityPayload),
         trace.org_id,
       ]
     );
@@ -212,8 +235,8 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
          post_created_at, manually_escalated, reviewed, ai_trace_id, signal_quality, notes
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,
-         $9,$10,$11,$12,true,
-         NOW(), true, true, $13, $14, $15
+         $9,$10,$11,$12,$13,
+         NOW(), false, false, $14, $15, NULL
        )
        ON CONFLICT (org_id, source, external_id) DO UPDATE SET
          title = EXCLUDED.title,
@@ -221,15 +244,15 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
          url = COALESCE(EXCLUDED.url, posts.url),
          author = COALESCE(EXCLUDED.author, posts.author),
          reasoning = EXCLUDED.reasoning,
-         escalated = true,
-         manually_escalated = true,
-         reviewed = true,
+         escalation_score = GREATEST(COALESCE(posts.escalation_score, 0), EXCLUDED.escalation_score),
+         escalated = EXCLUDED.escalated OR posts.escalated,
+         manually_escalated = false,
+         reviewed = false,
          post_status = CASE WHEN posts.post_status IN ('archived','dismissed') THEN 'unread' ELSE COALESCE(posts.post_status, 'unread') END,
          dismiss_reason = NULL,
          snoozed_until = NULL,
          ai_trace_id = EXCLUDED.ai_trace_id,
-         signal_quality = EXCLUDED.signal_quality,
-         notes = EXCLUDED.notes
+         signal_quality = EXCLUDED.signal_quality
        RETURNING id`,
       [
         trace.org_id,
@@ -240,19 +263,18 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
         candidate.author,
         candidate.url,
         candidate.engagement,
-        Math.max(Number(trace.decision_evidence?.severity?.escalation_score) || 0, 60),
+        escalationScore,
         trace.decision_evidence?.category?.id || null,
         0,
         reasoning,
+        shouldEscalate,
         trace.id,
-        JSON.stringify(trace.quality || { score: 100, relevance: 1, confidence: 1, impact: 1, novelty: 1 }),
-        overrideNote ? `Override note: ${overrideNote}` : 'Surfaced by operator override from internal intelligence',
+        JSON.stringify(qualityPayload),
       ]
     );
     postId = inserted.id;
     await linkTraceToPost(trace.id, postId);
   }
-
   const previousDecision = trace.decision;
   const decisionEvidence = {
     ...(trace.decision_evidence || {}),

@@ -42,15 +42,18 @@ export function primaryBrandMoniker(orgName) {
 
 /** Strip Reddit/HTML noise so brand matchers and agents see readable text. */
 export function stripHtmlNoise(text = '') {
-  return String(text || '')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<[^>]+>/g, ' ')
+  // Decode entities FIRST — Reddit often stores &lt;div&gt; instead of <div>
+  let s = String(text || '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&#\d+;/g, ' ');
+  return s
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -65,8 +68,8 @@ const GENERIC_INTENT_SIGNALS = [
 ];
 
 /** Industry / training URLs and text signals that make a moniker brand-safe. */
-const INDUSTRY_URL_RE = /cadet|pilot|aviation|flying|dgca|igia|flight|cpl|atpl|academy|admission|icpp|ground.?school|flight.?school/i;
-const INDUSTRY_TEXT_RE = /\b(aviation|pilot|cadet|flying|flight school|ground school|dgca|cpl|atpl|icpp|admission|admissions|academy)\b/i;
+const INDUSTRY_URL_RE = /cadet|pilot|aviation|flying|dgca|igia|flight|cpl|atpl|academy|admission|icpp?|adapt|ground.?school|flight.?school|indianaviation/i;
+const INDUSTRY_TEXT_RE = /\b(aviation|pilot|cadet|flying|flight school|ground school|dgca|cpl|atpl|icpp?|adapt|admission|admissions|academy|applicant|allotted)\b/i;
 
 export function normalizeHostname(raw) {
   if (!raw) return null;
@@ -112,6 +115,13 @@ export function textMentionsBrand(text, brandTerms = []) {
   const cleaned = stripHtmlNoise(text);
   return brandTerms.some((term) => {
     if (!term || term.length < 3) return false;
+    // Programme codes: ICPP / ICP13 / ICP-13 should match intel term "icpp" or "icp"
+    if (/^icpp?$/i.test(term)) {
+      return /\bicp\s*p?\s*-?\s*\d*\b/i.test(cleaned);
+    }
+    if (/^adapt$/i.test(term)) {
+      return /\badapt\b/i.test(cleaned);
+    }
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
     return new RegExp(`\\b${escaped}\\b`, 'i').test(cleaned);
   });
