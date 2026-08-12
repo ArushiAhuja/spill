@@ -48,9 +48,9 @@ function formatAgentOutputSnippet(output) {
   const bits = [];
   if (output.is_relevant === false) bits.push('said not relevant');
   else if (output.is_relevant === true) bits.push('said relevant');
+  if (output.reasoning) bits.push(String(output.reasoning).slice(0, 280));
+  else if (output.reason) bits.push(String(output.reason).slice(0, 280));
   if (output.category) bits.push(`category=${output.category}`);
-  if (output.reasoning) bits.push(String(output.reasoning).slice(0, 220));
-  if (output.reason) bits.push(String(output.reason).slice(0, 220));
   if (output.escalation_score != null) bits.push(`score=${output.escalation_score}`);
   if (output.decision) bits.push(`decision=${output.decision}`);
   if (output.score != null && output.threshold != null) bits.push(`quality ${output.score}/${output.threshold}`);
@@ -85,6 +85,19 @@ export function buildRejectionSummary(trace, observations = []) {
     lines.push(`Spill decision: ${decision}.`);
   }
 
+  const relevance = evidence.relevance || {};
+  const relevanceWhy = relevance.reason
+    || relevanceObs?.output?.reason
+    || relevanceObs?.output?.reasoning
+    || null;
+
+  // Lead with the concrete why — this is what operators need
+  if (relevanceWhy) {
+    lines.push(`Why: ${relevanceWhy}`);
+  } else if (decision === 'rejected_irrelevant') {
+    lines.push('Why: no specific brand-link explanation was stored for this trace (older run). Re-run after deploy for detailed reasons.');
+  }
+
   // Per-agent: what each recorded agent produced
   const agentLines = [];
   for (const obs of [
@@ -101,7 +114,6 @@ export function buildRejectionSummary(trace, observations = []) {
   }
   lines.push(...agentLines);
 
-  const relevance = evidence.relevance || {};
   if (relevance.is_relevant === false) {
     lines.push(`Relevance gate: not relevant${relevance.tier ? ` (${relevance.tier})` : ''}.`);
   } else if (relevance.tier) {
@@ -122,7 +134,9 @@ export function buildRejectionSummary(trace, observations = []) {
 
   // Final: why this decision won (after agents + gates)
   if (decision === 'rejected_irrelevant') {
-    lines.push('Final: candidate dropped because the relevance gate set is_relevant=false (category/quality not applied as a keep).');
+    lines.push(relevanceWhy
+      ? `Final: dropped — ${relevanceWhy}`
+      : 'Final: candidate dropped because is_relevant=false.');
   } else if (decision === 'suppressed_low_quality') {
     lines.push('Final: candidate was considered relevant but fell below the signal-quality threshold, so it was not shown on the dashboard.');
   } else if (decision === 'surfaced_override') {
@@ -136,6 +150,7 @@ export function buildRejectionSummary(trace, observations = []) {
     summary: lines.join(' '),
     lines,
     agents: agentLines,
+    why: relevanceWhy,
     relevance,
     quality_gate: qualityGate,
     category,

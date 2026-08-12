@@ -8,6 +8,8 @@ export const DEFAULT_PROMPTS = {
     description: 'Criteria for deciding which posts are worth classifying. Applied before the classifier to drop noise early.',
     content: `DEFAULT RULE: If this company's short name, full brand, programmes, or product codes appear in title/body on an EXTERNAL source, INCLUDE it.
 
+CASE-INSENSITIVE MATCHING (mandatory): Match brand names, monikers, and programme codes regardless of capitalisation (Chimes = CHIMES = chimes; ICPP = icpp = Icp13; ADAPT = adapt). Never exclude a post only because the keyword casing differs.
+
 Include a post if it:
 - Mentions this company's brand, short name, products, programmes (e.g. course codes), executives, or parent company on an EXTERNAL source (third-party media, Reddit, news, review sites, competitor comparison)
 - Is a prospective customer asking how to apply, waiting for results, or discussing admissions/training for this organisation — even if the title is only the brand moniker (e.g. title "Chimes" with body "I've applied…")
@@ -23,7 +25,9 @@ EXCLUDE if:
 - The company name appears only incidentally in a post that is entirely about something unrelated (true homonym with no industry/product context)
 - It is about a different company or industry with no connection to this one
 - It is generic content that happens to share a keyword but is not about this brand
-- It is personal or lifestyle content with no commercial or reputational signal`,
+- It is personal or lifestyle content with no commercial or reputational signal
+
+When you exclude, you must be able to state a concrete reason naming THIS organisation (missing brand, different company, homonym, or self-published) — never a vague "not relevant".`,
   },
 
   classifier_system: {
@@ -42,7 +46,8 @@ EXCLUDE if:
 - virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
 
 Rules:
-- is_relevant: true if the post genuinely concerns this company's products, services, customers, brand, CEO, short name with admissions/product context, or market position AND is from an external entity. Always true for third-party posts that name this brand and discuss applications, admissions, training results, reviews, or programmes. Set false if: (a) the post is self-published by this organisation on its own domain or official channel, (b) the company appears only as a true incidental/homonym with zero product context, or (c) the post is about an unrelated topic. External press, opinion pieces, and third-party Reddit threads that name this company are relevant. Apply learned exclusions strictly.
+- CASE-INSENSITIVE: brand names and programme codes match in any capitalisation.
+- is_relevant: true if the post genuinely concerns this company's products, services, customers, brand, CEO, short name with admissions/product context, or market position AND is from an external entity. Always true for third-party posts that name this brand and discuss applications, admissions, training results, reviews, or programmes. Set false if: (a) the post is self-published by this organisation on its own domain or official channel, (b) the company appears only as a true incidental/homonym with zero product context, or (c) the post is about an unrelated topic. External press, opinion pieces, and third-party Reddit threads that name this company are relevant. When false, reasoning must explain why it is not about THIS company. Apply learned exclusions strictly.
 - category_id: best matching category ID from the list above. null if not relevant or no match.
 - response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
 - location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`,

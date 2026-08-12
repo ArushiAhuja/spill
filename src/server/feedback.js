@@ -3,7 +3,7 @@ import { query } from './db.js';
 import { getOrganizationAgentConfig, saveOrganizationAgentConfig } from './organization-agent-config.js';
 import { syncFeedbackAssessment, syncImprovementRecommendation } from './event-intelligence.js';
 import { invalidateOrganizationAgentBriefing } from './organization-intelligence.js';
-import { buildKeepRuleFromPost, primaryBrandMoniker } from './relevance-policy.js';
+import { buildKeepRuleFromPost, primaryBrandMoniker, buildRelevanceAgentPriorityBlock } from './relevance-policy.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -485,20 +485,40 @@ export async function absorbFeedbackIntoKeepPolicy({
     [JSON.stringify(nextIntel), orgId]
   );
 
-  // Strengthen relevance agent priority_instructions with a durable policy line
+  // Rebuild relevance agent policy from ALL keep rules + brand keywords (not just one line).
+  // This is what the Relevance Agent actually reads on every cycle.
+  const priority = buildRelevanceAgentPriorityBlock(orgRow, nextIntel);
   const config = await getOrganizationAgentConfig(orgId, 'relevance');
-  const keepLine = `OVERRIDE-LEARNED KEEP: treat posts like "${compactText(post.title, 80)}" (and similar ${moniker || 'brand'} + admissions/aviation context) as relevant. Operator said: ${compactText(explanation, 160)}`;
-  let priority = String(config.priority_instructions || '').trim();
-  if (!priority.includes(compactText(post.title, 60))) {
-    priority = [keepLine, priority].filter(Boolean).join('\n').slice(0, 8000);
-    await saveOrganizationAgentConfig(
-      orgId,
-      'relevance',
-      { priority_instructions: priority },
-      authorEmail || 'spill-feedback-learning',
-      `Override learning: keep rule for "${compactText(post.title, 80)}"`
-    );
-  }
+  const keepExample = {
+    source: 'user_feedback',
+    feedback_id: feedbackId,
+    input: {
+      title: compactText(post.title, 300),
+      body: compactText(post.body, 700),
+      source: post.source || null,
+    },
+    expected: { relevant: true, should_surface: true, is_relevant: true },
+    feedback: { label, reason: compactText(explanation, 400) || null },
+  };
+  const priorExamples = Array.isArray(config.examples) ? config.examples.filter(e => e?.feedback_id !== feedbackId) : [];
+  const nextExamples = [keepExample, ...priorExamples].slice(0, 20);
+
+  await saveOrganizationAgentConfig(
+    orgId,
+    'relevance',
+    {
+      priority_instructions: priority,
+      examples: nextExamples,
+      evaluation_criteria: {
+        ...(config.evaluation_criteria || {}),
+        case_insensitive_brand_match: true,
+        require_explicit_rejection_reason: true,
+        always_keep_external_brand_with_context: true,
+      },
+    },
+    authorEmail || 'spill-feedback-learning',
+    `Override learning: synced relevance agent keep policy (${nextRules.length} rules)`
+  );
 
   if (feedbackId && eventId) {
     await recordLearningAction({
@@ -507,9 +527,9 @@ export async function absorbFeedbackIntoKeepPolicy({
       eventId,
       agentName: 'relevance',
       actionType: 'keep_rule',
-      before: { keep_rule_count: existing.length },
-      after: { keep_rule_count: nextRules.length, rule },
-      reason: explanation || 'Wrote deterministic keep rule from operator override.',
+      before: { keep_rule_count: existing.length, relevance_version: config.version || 0 },
+      after: { keep_rule_count: nextRules.length, rule, relevance_priority_synced: true },
+      reason: explanation || 'Wrote deterministic keep rule and synced Relevance Agent policy.',
     }).catch(() => {});
   }
 
@@ -519,6 +539,7 @@ export async function absorbFeedbackIntoKeepPolicy({
     keep_rule: rule,
     keep_rule_count: nextRules.length,
     boost_terms: nextIntel.boostTerms,
+    relevance_agent_synced: true,
   };
 }
 

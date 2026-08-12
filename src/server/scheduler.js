@@ -20,6 +20,7 @@ import {
   isBrandQueryPositive,
   isExternalBrandMention,
   stripHtmlNoise,
+  explainRelevanceDecision,
 } from './relevance-policy.js';
 import { lightStorageHygiene } from './storage-hygiene.js';
 
@@ -509,6 +510,21 @@ export async function runOrgCycle(orgId) {
       if (isExternalBrandMention(post, brandTerms, org, sourceConfigs, intel)) {
         post.external_brand_mention = true;
       }
+      if (!post.relevance_explanation) {
+        const explanation = explainRelevanceDecision({
+          post,
+          org,
+          brandTerms,
+          intel,
+          sourceConfigs,
+          isRelevant: post.is_relevant !== false,
+          classifierReasoning: post.reasoning,
+          forcedKeep: !!post.external_brand_mention && post.is_relevant !== false,
+          tier: post.relevance_tier || null,
+        });
+        post.relevance_explanation = explanation.reason;
+        post.relevance_signals = explanation.signals;
+      }
       const quality = signalQuality(post);
       post.signal_quality = quality;
       const decision = post.is_relevant === false ? 'rejected_irrelevant'
@@ -536,7 +552,12 @@ export async function runOrgCycle(orgId) {
           detected_query: post.detected_query || post.matched_query || null,
           brand_query_hit: !!(post.brand_query_hit || post.query_brand_positive),
           self_published: false,
-          relevance: { tier: post.relevance_tier || null, is_relevant: post.is_relevant !== false },
+          relevance: {
+            tier: post.relevance_tier || null,
+            is_relevant: post.is_relevant !== false,
+            reason: post.relevance_explanation || null,
+            signals: post.relevance_signals || null,
+          },
           category: { id: post.category_id || null, name: categoryName, confidence: post.classification_confidence ?? null, reasoning: post.reasoning || null },
           severity: { escalation_score: post.escalation_score ?? null, escalated: !!post.escalated, dimensions: post.escalation_dimensions || {} },
           quality_gate: { score: quality.score, threshold: qualityThreshold, decision },
@@ -553,12 +574,15 @@ export async function runOrgCycle(orgId) {
         observations: [{
           name: 'Relevance Agent', kind: 'agent',
           model: post.relevance_tier === 'tier_3_ai_verified' ? relevanceAgentConfig.model : 'deterministic-policy',
-          promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance' : null,
-          promptVersion: post._relevance_trace?.prompt?.version ?? (post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : null),
-        input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks', prompt_id: post._relevance_trace?.prompt?.id || null, prompt_hash: post._relevance_trace?.promptHash || null, source_agent_config_version: sourceAgentConfig.version, source_agent_policy: buildAgentPolicyContext(sourceAgentConfig), agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
+          promptKey: post.relevance_tier === 'tier_3_ai_verified' ? 'relevance' : 'relevance',
+          promptVersion: post._relevance_trace?.prompt?.version ?? (post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.version : relevancePrompt.version),
+        input: { tier: post.relevance_tier, policy: post.relevance_tier === 'tier_3_ai_verified' ? relevancePrompt.content : 'Brand / intelligence keyword and exclusion checks (case-insensitive)', prompt_id: post._relevance_trace?.prompt?.id || null, prompt_hash: post._relevance_trace?.promptHash || null, source_agent_config_version: sourceAgentConfig.version, source_agent_policy: buildAgentPolicyContext(sourceAgentConfig), agent_config_version: relevanceAgentConfig.version, agent_policy: buildAgentPolicyContext(relevanceAgentConfig) },
           output: {
             is_relevant: post.is_relevant !== false,
             tier: post.relevance_tier || null,
+            reasoning: post.relevance_explanation || null,
+            reason: post.relevance_explanation || null,
+            signals: post.relevance_signals || null,
             external_brand_mention: !!post.external_brand_mention,
             brand_moniker_policy: post.external_brand_mention
               ? 'explicit external brand (or moniker + context) forced keep'

@@ -400,3 +400,121 @@ export function isExternalBrandMention(post = {}, brandTerms = [], org = {}, sou
   if (textMentionsBrand(text, brandTerms) || isBrandQueryPositive(post, brandTerms)) return true;
   return contextualBrandMonikerMatch(post, org, intel, brandTerms);
 }
+
+/**
+ * Human-readable relevance decision for traces / rejection UI.
+ * Always explain *why* relative to the monitored organisation (case-insensitive).
+ */
+export function explainRelevanceDecision({
+  post = {},
+  org = {},
+  brandTerms = [],
+  intel = {},
+  sourceConfigs = [],
+  isRelevant = true,
+  classifierReasoning = null,
+  forcedKeep = false,
+  tier = null,
+} = {}) {
+  const orgName = org.name || 'this organisation';
+  const moniker = primaryBrandMoniker(org.name);
+  const title = stripHtmlNoise(post.title || '');
+  const body = stripHtmlNoise(post.body || '');
+  const blob = `${title} ${body}`;
+  const selfPub = isSelfPublished(post, org, sourceConfigs, intel);
+  const brandHit = textMentionsBrand(blob, brandTerms);
+  const monikerHit = moniker && new RegExp(`\\b${moniker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(blob);
+  const contextual = contextualBrandMonikerMatch(post, org, intel, brandTerms);
+  const learned = matchesLearnedKeepRule(post, intel);
+  const termsPreview = (brandTerms || []).slice(0, 8).join(', ') || '(none configured)';
+
+  if (selfPub) {
+    return {
+      is_relevant: false,
+      reason: `Rejected: content appears self-published by ${orgName} (official site/handle). Spill only surfaces third-party mentions.`,
+      signals: { self_published: true, brand_hit: brandHit, moniker_hit: !!monikerHit, tier },
+    };
+  }
+
+  if (forcedKeep || (isRelevant && (learned || contextual || brandHit))) {
+    const why = learned
+      ? 'matches an operator-learned keep rule'
+      : brandHit
+        ? `case-insensitive brand/programme match against [${termsPreview}]`
+        : contextual
+          ? `moniker "${moniker}" with aviation/admissions context`
+          : 'passed relevance checks';
+    return {
+      is_relevant: true,
+      reason: `Kept for ${orgName}: ${why}.`,
+      signals: { brand_hit: brandHit, moniker_hit: !!monikerHit, learned_keep: learned, contextual, tier },
+    };
+  }
+
+  if (!isRelevant) {
+    if (classifierReasoning && String(classifierReasoning).trim() && !/^unclassified$/i.test(classifierReasoning)) {
+      return {
+        is_relevant: false,
+        reason: `Rejected for ${orgName}: ${String(classifierReasoning).trim()}`,
+        signals: { brand_hit: brandHit, moniker_hit: !!monikerHit, classifier: true, tier },
+      };
+    }
+    if (!brandHit && !monikerHit) {
+      return {
+        is_relevant: false,
+        reason: `Rejected for ${orgName}: no case-insensitive match for brand terms [${termsPreview}]${moniker ? ` or moniker "${moniker}"` : ''} in title/body.`,
+        signals: { brand_hit: false, moniker_hit: false, tier },
+      };
+    }
+    if (monikerHit && !contextual && !brandHit) {
+      return {
+        is_relevant: false,
+        reason: `Rejected for ${orgName}: found "${moniker}" but without aviation/admissions/programme context — treated as a possible English homonym (e.g. church bells), not ${orgName}.`,
+        signals: { brand_hit: brandHit, moniker_hit: true, contextual: false, tier },
+      };
+    }
+    return {
+      is_relevant: false,
+      reason: `Rejected for ${orgName}: no clear third-party link to this organisation's brand, programmes, or admissions/training context (matching is case-insensitive).`,
+      signals: { brand_hit: brandHit, moniker_hit: !!monikerHit, tier },
+    };
+  }
+
+  return {
+    is_relevant: true,
+    reason: `Kept for ${orgName}: passed relevance checks.`,
+    signals: { brand_hit: brandHit, moniker_hit: !!monikerHit, tier },
+  };
+}
+
+/** Build the relevance-agent priority block from intel keep rules + brand keywords. */
+export function buildRelevanceAgentPriorityBlock(org = {}, intel = {}) {
+  const brandKws = (intel.brandKeywords || []).map(String);
+  const productKws = (intel.productKeywords || []).map(String);
+  const boosts = (intel.boostTerms || []).map(String);
+  const rules = Array.isArray(intel.learnedKeepRules) ? intel.learnedKeepRules.filter(r => r && r.active !== false) : [];
+  const lines = [
+    'CASE-INSENSITIVE MATCHING (mandatory): brand names, short monikers, and programme codes match regardless of capitalisation (e.g. Chimes/CHIMES/chimes, ICPP/icpp/Icp13, ADAPT/adapt). Never reject solely because casing differs.',
+    `Organisation monitored: ${org.name || 'unknown'}.`,
+    brandKws.length ? `Brand / programme keywords (any case): ${brandKws.join(', ')}` : null,
+    productKws.length ? `Product / service keywords (any case): ${productKws.slice(0, 12).join(', ')}` : null,
+    boosts.length ? `Boost terms from feedback: ${boosts.slice(0, 12).join(', ')}` : null,
+    'ALWAYS KEEP third-party posts that name this organisation (full brand or moniker) with admissions, aviation, training, programme codes, reviews, or customer-experience context.',
+    'When excluding, your reasoning MUST say why it is not about THIS organisation (missing brand, true homonym, different company, or self-published) — never a vague "not relevant".',
+  ].filter(Boolean);
+
+  if (rules.length) {
+    lines.push('Operator-learned keep patterns (treat similar posts as relevant):');
+    for (const r of rules.slice(0, 15)) {
+      const bits = [
+        r.exact_title ? `title~"${String(r.exact_title).slice(0, 60)}"` : null,
+        r.moniker ? `moniker=${r.moniker}` : null,
+        r.phrase ? `phrase="${r.phrase}"` : null,
+        Array.isArray(r.requires) && r.requires.length ? `needs:${r.requires.slice(0, 4).join('|')}` : null,
+        r.note ? `note:${String(r.note).slice(0, 80)}` : null,
+      ].filter(Boolean);
+      lines.push(`- ${bits.join('; ')}`);
+    }
+  }
+  return lines.join('\n');
+}

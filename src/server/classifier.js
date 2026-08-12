@@ -4,6 +4,7 @@ import { buildAgentPolicyContext } from './organization-agent-config.js';
 import {
   buildBrandTerms,
   isExternalBrandMention,
+  explainRelevanceDecision,
 } from './relevance-policy.js';
 
 
@@ -119,7 +120,7 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
       posts: posts.map((post, index) => ({ post_index: index + 1, title: post.title || null, body: (post.body || '').slice(0, 500), source: post.source, engagement: post.score || 0 })),
       severity_policy: { prompt_id: severityComposition.prompt.id, version: severityComposition.prompt.version, instructions: severityComposition.systemPrompt },
       required_output: [{ post_index: 1, category_id: 'uuid or null', customer_impact: '0-10', operational_urgency: '0-10', trust_risk: '0-10', virality_potential: '0-10', reasoning: 'one sentence', response_template: 'string or null', location_tag: 'city name or null', confidence: '0-100', is_relevant: true }],
-      output_rules: `Return only a JSON array with exactly ${posts.length} objects, using post_index (1-based). When relevance is unclear, set is_relevant false.`,
+      output_rules: `Return only a JSON array with exactly ${posts.length} objects, using post_index (1-based). Brand/programme matching is CASE-INSENSITIVE (Chimes=CHIMES=chimes, ICPP=icp13). When is_relevant is false, reasoning MUST explain specifically why this is not about "${orgName || 'the monitored organisation'}" (missing brand, different company, true homonym, or self-published) — never vague "not relevant". Prefer is_relevant true when the brand/moniker appears with admissions/aviation/training context.`,
     },
   });
   const systemContent = categoryComposition.systemPrompt;
@@ -131,7 +132,8 @@ async function classifyBatch(posts, categories, feedbackContext = null, orgName 
 - virality_potential: 0=niche or low-traffic post, 5=moderate engagement, 10=trending or likely to break into mainstream media
 
 Rules:
-- is_relevant: Set to FALSE when: (a) the company name "${orgName || 'this company'}" does not appear in the post AND there is no clear product/service connection AND the item was not retrieved via a brand-name news query, OR (b) the post is entirely about a different company with no mention of this one, OR (c) the content is self-published by this organisation (own website / official handle). Set TRUE for external brand mentions (third-party press, Reddit, reviews) including CEO/leadership opinion pieces that name this company. Brand-query Google News hits are relevant even when the title is truncated.${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
+- CASE-INSENSITIVE: "${orgName || 'this company'}" and its programme codes match in any capitalisation.
+- is_relevant: Set to FALSE when: (a) the company name "${orgName || 'this company'}" does not appear in the post (any case) AND there is no clear product/service connection AND the item was not retrieved via a brand-name news query, OR (b) the post is entirely about a different company with no mention of this one, OR (c) the content is self-published by this organisation (own website / official handle). Set TRUE for external brand mentions (third-party press, Reddit, reviews) including CEO/leadership opinion pieces that name this company. Brand-query Google News hits are relevant even when the title is truncated. When false, reasoning must say why it is not about "${orgName || 'this company'}".${feedbackContext ? ' Apply learned exclusions strictly.' : ''}
 - category_id: best matching category ID. null if not relevant or no match.
 - response_template: for posts with customer_impact >= 4 OR operational_urgency >= 4, write a 2-3 sentence empathetic public response the company could post. null otherwise.
 - location_tag: if the post clearly mentions a city/region (Delhi, Mumbai, Bengaluru, Hyderabad, Chennai, Pune, etc.), extract it. null otherwise.`;
@@ -211,6 +213,9 @@ Rules:
         : false;
       if (!hasBrand && !hasIntelKw && !hasExternalBrand) {
         cls.is_relevant = false;
+        if (!cls.reasoning || cls.reasoning === 'unclassified') {
+          cls.reasoning = `No case-insensitive brand/programme match for ${orgName || 'this organisation'} in title/body.`;
+        }
       }
     }
     // Brand-query hits from external sources stay relevant when AI is unsure
@@ -228,9 +233,11 @@ Rules:
     // moniker + aviation/admissions co-signals) must never be LLM-rejected as
     // irrelevant. Past feedback learning softens the model but does not replace
     // this policy — e.g. "Chimes" + "I've applied" on CadetPilot.
+    let forcedKeep = false;
     if (cls.is_relevant === false && organization) {
       if (isExternalBrandMention(post, brandTermsForGuard, organization, sourceConfigs, intel || {})) {
         cls.is_relevant = true;
+        forcedKeep = true;
         cls.reasoning = (cls.reasoning ? cls.reasoning + ' ' : '')
           + 'Kept: explicit external brand mention (deterministic policy override).';
       }
@@ -243,7 +250,7 @@ Rules:
       trust_risk:         clamp(cls.trust_risk         || 0, 0, 10),
       virality_potential: clamp(cls.virality_potential  || 0, 0, 10),
     };
-    return scorePost(
+    const scored = scorePost(
       post, category, dimensions,
       cls.reasoning || '',
       cls.response_template || null,
@@ -252,6 +259,20 @@ Rules:
       clamp((cls.confidence ?? 65) / 100, 0, 1),
       { model, latencyMs: Date.now() - startedAt, inputTokens: response.usage?.prompt_tokens, outputTokens: response.usage?.completion_tokens, raw, prompt: categoryComposition.prompt, promptHash: categoryComposition.promptHash, promptSnapshot: categoryComposition.finalPrompt, severityPrompt: severityComposition.prompt, severityPromptHash: severityComposition.promptHash }, severityConfig,
     );
+    const explanation = explainRelevanceDecision({
+      post,
+      org: organization || { name: orgName },
+      brandTerms: brandTermsForGuard,
+      intel: intel || {},
+      sourceConfigs,
+      isRelevant: scored.is_relevant !== false,
+      classifierReasoning: cls.reasoning,
+      forcedKeep,
+      tier: post.relevance_tier || null,
+    });
+    scored.relevance_explanation = explanation.reason;
+    scored.relevance_signals = explanation.signals;
+    return scored;
   });
 }
 
