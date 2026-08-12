@@ -54,6 +54,7 @@ export function stripHtmlNoise(text = '') {
   return s
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<[^>]+>/g, ' ')
+    .replace(/<\/?[a-zA-Z][^<\s]*/g, ' ') // truncated/orphan tags without closing >
     .replace(/\s+/g, ' ')
     .trim();
 }
