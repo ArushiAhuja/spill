@@ -3,17 +3,17 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        bg: '#0d0f1a',
-        surface: '#13161f',
-        'surface-2': '#191d2b',
-        'surface-3': '#1e2338',
-        border: '#1e2535',
-        'border-2': '#243047',
-        text: '#e2e8f0',
-        muted: '#64748b',
-        faint: '#334155',
+        bg: '#0a0e17',
+        surface: '#121826',
+        'surface-2': '#1a2233',
+        'surface-3': '#222b3d',
+        border: '#3d4a63',
+        'border-2': '#2a3548',
+        text: '#f8fafc',
+        muted: '#a8b4c8',
+        faint: '#7c8ba1',
         accent: '#3b82f6',
-        'accent-dim': 'rgba(59,130,246,0.12)',
+        'accent-dim': 'rgba(59,130,246,0.16)',
         purple: '#9b8ff7',
       },
       fontFamily: {

@@ -1,9 +1,10 @@
 'use client'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import OrgNav from '@/components/OrgNav'
 import { api } from '@/lib/api'
 import { getUser } from '@/lib/auth'
+import { theme as T } from '@/lib/theme'
 
 const STATUS_TABS = [
   { key: 'all', label: 'All' },
@@ -22,23 +23,25 @@ const CHANNEL_LABELS = {
   linkedin: { label: 'LinkedIn', color: '#38bdf8', short: 'LI' },
   playstore: { label: 'Play Store', color: '#4ade80', short: 'PS' },
   appstore: { label: 'App Store', color: '#a3e635', short: 'AS' },
-  manual: { label: 'Manual', color: '#94a3b8', short: 'MN' },
+  manual: { label: 'Manual', color: '#a8b4c8', short: 'MN' },
 }
 
 const PRIORITY_LABELS = {
   urgent: { label: 'urgent', color: '#f87171' },
   high: { label: 'high', color: '#fbbf24' },
-  normal: { label: 'normal', color: '#64748b' },
-  low: { label: 'low', color: '#475569' },
+  normal: { label: 'normal', color: '#a8b4c8' },
+  low: { label: 'low', color: '#7c8ba1' },
 }
 
 const PERSONALITIES = ['professional', 'friendly', 'apologetic', 'assertive']
 const LOB_OPTIONS = ['Air', 'Hotel', 'Bus', 'Cabs', 'Holidays', 'Payments', 'Other']
 const SMART_QUEUES = [
   { key: 'all', label: 'All work' },
-  { key: 'unanswered_48h', label: 'Unanswered >48h', color: '#fb7185' },
+  { key: 'unanswered_48h', label: 'Unanswered > 48 hours', color: '#fb7185' },
+  { key: 'sla_breached', label: 'SLA breached', color: '#f87171' },
   { key: 'expedited', label: 'Expedited escalations', color: '#fbbf24' },
   { key: 'pending_customer', label: 'Pending customer action', color: '#60a5fa' },
+  { key: 'unassigned', label: 'Unassigned', color: '#c084fc' },
 ]
 
 function timeAgo(ts) {
@@ -61,12 +64,12 @@ function slaStatus(ticket) {
 }
 
 function ChannelBadge({ channel }) {
-  const ch = CHANNEL_LABELS[channel] || { label: channel, color: '#64748b', short: '??' }
+  const ch = CHANNEL_LABELS[channel] || { label: channel, color: '#a8b4c8', short: '??' }
   return (
     <span style={{
-      fontSize: 10,
+      fontSize: 12,
       fontWeight: 600,
-      padding: '2px 6px',
+      padding: '3px 8px',
       borderRadius: 4,
       background: ch.color + '22',
       color: ch.color,
@@ -79,11 +82,11 @@ function ChannelBadge({ channel }) {
 
 function StatusBadge({ status }) {
   const tab = STATUS_TABS.find(t => t.key === status)
-  const color = tab?.color || '#64748b'
+  const color = tab?.color || '#a8b4c8'
   return (
     <span style={{
-      fontSize: 10,
-      padding: '2px 8px',
+      fontSize: 12,
+      padding: '3px 10px',
       borderRadius: 99,
       background: color + '22',
       color,
@@ -94,7 +97,24 @@ function StatusBadge({ status }) {
 
 function PriorityDot({ priority }) {
   const p = PRIORITY_LABELS[priority] || PRIORITY_LABELS.normal
-  return <span style={{ width: 7, height: 7, borderRadius: '50%', background: p.color, display: 'inline-block', flexShrink: 0 }} title={p.label} />
+  return <span style={{ width: 8, height: 8, borderRadius: '50%', background: p.color, display: 'inline-block', flexShrink: 0 }} title={p.label} />
+}
+
+function AgentChip({ name }) {
+  const assigned = Boolean(name)
+  return (
+    <span style={{
+      fontSize: 12,
+      fontWeight: 600,
+      padding: '3px 9px',
+      borderRadius: 99,
+      background: assigned ? 'rgba(96,165,250,0.16)' : 'rgba(168,180,200,0.12)',
+      color: assigned ? '#93c5fd' : T.muted,
+      border: `1px solid ${assigned ? 'rgba(96,165,250,0.35)' : T.borderSoft}`,
+    }}>
+      Agent · {name || 'Unassigned'}
+    </span>
+  )
 }
 
 function CustomerLabelBadge({ label }) {
@@ -104,12 +124,12 @@ function CustomerLabelBadge({ label }) {
     'High Influencer': '#a855f7',
     'Verified': '#3b82f6',
   }
-  const color = colors[label] || '#64748b'
+  const color = colors[label] || '#a8b4c8'
   return (
     <span style={{
-      fontSize: 9,
+      fontSize: 11,
       fontWeight: 700,
-      padding: '1px 6px',
+      padding: '2px 7px',
       borderRadius: 4,
       background: color + '22',
       color,
@@ -161,8 +181,10 @@ export default function TicketsPage() {
   const [smartQueue, setSmartQueue] = useState('all')
   const [queueCounts, setQueueCounts] = useState({})
   const [members, setMembers] = useState([])
-  const [toolsOpen, setToolsOpen] = useState(true)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const [listCollapsed, setListCollapsed] = useState(false)
   const [metadataDraft, setMetadataDraft] = useState({ lob: '', booking_id: '', contact_email: '', contact_phone: '', use_case: '' })
+  const [tagDraft, setTagDraft] = useState('')
   const [exporting, setExporting] = useState(false)
   const currentUser = getUser()
 
@@ -201,6 +223,8 @@ export default function TicketsPage() {
     setSelectedTicket(ticket)
     setAiResponses([])
     setNoteBody('')
+    setTagDraft('')
+    setListCollapsed(false)
     setLoadingDetail(true)
     try {
       const data = await api.getTicket(slug, ticket.id)
@@ -213,6 +237,23 @@ export default function TicketsPage() {
     } finally {
       setLoadingDetail(false)
     }
+  }
+
+  async function saveTags(nextTags) {
+    if (!ticketDetail) return
+    const data = await api.updateTicket(slug, ticketDetail.id, { tags: nextTags })
+    setTicketDetail(current => ({ ...current, ...data.ticket }))
+    setSelectedTicket(current => current?.id === data.ticket.id ? { ...current, ...data.ticket } : current)
+    loadTickets()
+  }
+
+  async function addTag() {
+    const tag = tagDraft.trim().replace(/^#/, '')
+    if (!tag || !ticketDetail) return
+    const existing = ticketDetail.tags || []
+    if (existing.includes(tag)) { setTagDraft(''); return }
+    await saveTags([...existing, tag])
+    setTagDraft('')
   }
 
   async function updateTicketStatus(id, status) {
@@ -359,31 +400,42 @@ export default function TicketsPage() {
   const sla = ticketDetail ? slaStatus(ticketDetail) : null
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#0d0f1a' }}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: T.bg }}>
       <OrgNav slug={slug} />
-      <main style={{ marginLeft: 208, flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: '#0b1220' }}>
+      <main style={{ marginLeft: 208, flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: T.bg }}>
 
         {/* Header */}
-        <div style={{ padding: '20px 28px 0', borderBottom: '1px solid #1e2535', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ padding: '18px 24px 0', borderBottom: `1px solid ${T.borderSoft}`, flexShrink: 0, background: T.surface }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <div>
-              <h1 style={{ fontSize: 18, fontWeight: 500, color: '#e2e8f0', margin: 0 }}>Tickets</h1>
-              <p style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 0' }}>Priority-first social inbox · multi-channel</p>
+              <h1 style={{ fontSize: 22, fontWeight: 650, color: T.text, margin: 0 }}>Tickets</h1>
+              <p style={{ fontSize: 14, color: T.muted, margin: '4px 0 0' }}>Priority-first social inbox · multi-channel</p>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {selected.size > 0 && (
-                <button onClick={() => setShowBulk(true)} style={btnStyle('#1e2535', '#94a3b8')}>
+                <button onClick={() => setShowBulk(true)} style={btnStyle(T.surfaceRaised, T.muted)}>
                   bulk actions ({selected.size})
                 </button>
               )}
-              <button onClick={() => setShowCanned(true)} style={btnStyle('#1e2535', '#94a3b8')}>canned responses</button>
-              <button onClick={downloadRawData} disabled={exporting} style={btnStyle('#1e2535', '#cbd5e1')}>{exporting ? 'exporting…' : 'download raw data'}</button>
-              <button onClick={() => setShowNewTicket(true)} style={btnStyle('#3b82f6', '#fff')}>+ new ticket</button>
+              <button onClick={() => setShowCanned(true)} style={btnStyle(T.surfaceRaised, T.muted)}>canned responses</button>
+              <button onClick={downloadRawData} disabled={exporting} style={btnStyle(T.surfaceRaised, T.textSecondary)}>{exporting ? 'exporting…' : 'Download raw data'}</button>
+              <button onClick={() => setShowNewTicket(true)} style={btnStyle(T.accent, '#fff')}>+ new ticket</button>
             </div>
           </div>
 
+          {/* Smart queues first — SLA navigation */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '0 0 12px' }}>
+            <span style={{ fontSize: 12, color: T.muted, alignSelf: 'center', fontWeight: 800, letterSpacing: '.06em' }}>PRIORITY QUEUES</span>
+            {SMART_QUEUES.map(queue => {
+              const active = smartQueue === queue.key
+              const count = queue.key === 'all' ? total : (queueCounts[queue.key] || 0)
+              const color = queue.color || T.textSecondary
+              return <button key={queue.key} onClick={() => { setSmartQueue(queue.key); setStatusTab('all'); setSelected(new Set()) }} style={{ ...btnStyle(active ? `${color}22` : T.surfaceRaised, active ? color : T.textSecondary), border: `1px solid ${active ? `${color}66` : T.border}`, fontSize: 13, padding: '7px 12px' }}>{queue.label} <span style={{ fontFamily:'var(--font-mono)', marginLeft:4 }}>{count}</span></button>
+            })}
+          </div>
+
           {/* Status tabs */}
-          <div style={{ display: 'flex', gap: 0 }}>
+          <div style={{ display: 'flex', gap: 0, overflowX: 'auto' }}>
             {STATUS_TABS.map(tab => {
               const count = tab.key === 'all' ? total : (statusCounts[tab.key] || 0)
               const active = statusTab === tab.key
@@ -392,52 +444,44 @@ export default function TicketsPage() {
                   key={tab.key}
                   onClick={() => { setStatusTab(tab.key); setSmartQueue('all'); setSelected(new Set()) }}
                   style={{
-                    padding: '8px 16px',
+                    padding: '10px 16px',
                     background: 'none',
                     border: 'none',
-                    borderBottom: active ? `2px solid ${tab.color || '#3b82f6'}` : '2px solid transparent',
-                    color: active ? (tab.color || '#3b82f6') : '#475569',
-                    fontSize: 13,
+                    borderBottom: active ? `2px solid ${tab.color || T.accent}` : '2px solid transparent',
+                    color: active ? (tab.color || T.accent) : T.muted,
+                    fontSize: 14,
                     cursor: 'pointer',
                     fontFamily: 'inherit',
                     transition: 'all 0.12s',
                     display: 'flex',
                     alignItems: 'center',
                     gap: 6,
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   {tab.label}
                   {count > 0 && (
                     <span style={{
-                      fontSize: 10,
-                      padding: '1px 6px',
+                      fontSize: 12,
+                      padding: '1px 7px',
                       borderRadius: 99,
-                      background: active ? (tab.color || '#3b82f6') + '22' : '#1e2535',
-                      color: active ? (tab.color || '#3b82f6') : '#475569',
+                      background: active ? (tab.color || T.accent) + '22' : T.surfaceRaised,
+                      color: active ? (tab.color || T.accent) : T.muted,
                     }}>{count}</span>
                   )}
                 </button>
               )
             })}
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '12px 0 14px' }}>
-            <span style={{ fontSize: 11, color: '#94a3b8', alignSelf: 'center', fontWeight: 700, letterSpacing: '.06em' }}>SMART QUEUES</span>
-            {SMART_QUEUES.map(queue => {
-              const active = smartQueue === queue.key
-              const count = queue.key === 'all' ? total : (queueCounts[queue.key] || 0)
-              const color = queue.color || '#cbd5e1'
-              return <button key={queue.key} onClick={() => { setSmartQueue(queue.key); setStatusTab('all'); setSelected(new Set()) }} style={{ ...btnStyle(active ? `${color}22` : '#111827', active ? color : '#cbd5e1'), border: `1px solid ${active ? `${color}66` : '#334155'}`, fontSize: 12, padding: '6px 10px' }}>{queue.label} <span style={{ fontFamily:'var(--font-mono)', marginLeft:4 }}>{count}</span></button>
-            })}
-          </div>
         </div>
 
         {/* Filters */}
-        <div style={{ padding: '10px 28px', borderBottom: '1px solid #1e2535', display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+        <div style={{ padding: '10px 24px', borderBottom: `1px solid ${T.borderSoft}`, display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', background: T.surface }}>
           <input
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="search tickets..."
-            style={inputStyle({ width: 200 })}
+            style={inputStyle({ width: 220 })}
           />
           <select value={filterChannel} onChange={e => setFilterChannel(e.target.value)} style={selectStyle()}>
             <option value="">all channels</option>
@@ -457,9 +501,9 @@ export default function TicketsPage() {
               <button
                 onClick={() => setFilterAwaiting(a => !a)}
                 style={{
-                  ...btnStyle(filterAwaiting ? '#fb923c22' : '#1e2535', filterAwaiting ? '#fb923c' : '#64748b'),
-                  border: `1px solid ${filterAwaiting ? '#fb923c44' : '#1e2535'}`,
-                  fontSize: 12,
+                  ...btnStyle(filterAwaiting ? '#fb923c22' : T.surfaceRaised, filterAwaiting ? '#fb923c' : T.muted),
+                  border: `1px solid ${filterAwaiting ? '#fb923c44' : T.border}`,
+                  fontSize: 13,
                 }}
               >
                 {filterAwaiting ? '⏳ awaiting' : 'awaiting'}
@@ -468,41 +512,57 @@ export default function TicketsPage() {
           )}
         </div>
 
-        {/* Body: list + detail */}
+        {/* Body: compact list + conversation-first detail */}
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
           {/* Ticket list */}
-          <div style={{ width: selectedTicket ? 340 : '100%', borderRight: selectedTicket ? '1px solid #334155' : 'none', overflow: 'auto', flexShrink: 0, background:'#0f172a' }}>
-            {/* Select all */}
-            <div style={{ padding: '8px 16px', borderBottom: '1px solid #1e2535', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="checkbox" checked={selected.size > 0 && selected.size === tickets.length} onChange={selectAll} style={{ cursor: 'pointer' }} />
-              <span style={{ fontSize: 11, color: '#475569' }}>{loading ? 'loading...' : `${tickets.length} tickets`}</span>
+          <div style={{ width: selectedTicket ? (listCollapsed ? 56 : 280) : '100%', borderRight: selectedTicket ? `1px solid ${T.border}` : 'none', overflow: 'auto', flexShrink: 0, background: T.surface, transition: 'width .15s ease' }}>
+            <div style={{ padding: '8px 12px', borderBottom: `1px solid ${T.borderSoft}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {!listCollapsed && <>
+                <input type="checkbox" checked={selected.size > 0 && selected.size === tickets.length} onChange={selectAll} style={{ cursor: 'pointer' }} />
+                <span style={{ fontSize: 13, color: T.muted }}>{loading ? 'loading...' : `${tickets.length} tickets`}</span>
+              </>}
+              {selectedTicket && (
+                <button onClick={() => setListCollapsed(v => !v)} style={{ ...btnStyle('transparent', T.muted), marginLeft: 'auto', padding: '4px 8px', fontSize: 12 }} title={listCollapsed ? 'Expand list' : 'Collapse list'}>
+                  {listCollapsed ? '›' : '‹'}
+                </button>
+              )}
             </div>
 
             {loading ? (
-              <div style={{ padding: 40, textAlign: 'center', color: '#475569', fontSize: 13 }}>loading...</div>
+              <div style={{ padding: 40, textAlign: 'center', color: T.muted, fontSize: 14 }}>loading...</div>
             ) : tickets.length === 0 ? (
-              <div style={{ padding: 40, textAlign: 'center', color: '#475569', fontSize: 13 }}>no tickets</div>
+              <div style={{ padding: 40, textAlign: 'center', color: T.muted, fontSize: 14 }}>no tickets</div>
+            ) : listCollapsed ? (
+              tickets.map(ticket => {
+                const isOpen = selectedTicket?.id === ticket.id
+                return (
+                  <button key={ticket.id} onClick={() => openTicket(ticket)} title={ticket.title}
+                    style={{ display:'block', width:'100%', padding:'12px 8px', border:'none', borderBottom:`1px solid ${T.borderSoft}`, background: isOpen ? T.surfaceRaised : 'transparent', cursor:'pointer' }}>
+                    <PriorityDot priority={ticket.priority} />
+                  </button>
+                )
+              })
             ) : (
               tickets.map(ticket => {
                 const isSelected = selected.has(ticket.id)
                 const isOpen = selectedTicket?.id === ticket.id
                 const sl = slaStatus(ticket)
+                const agentName = ticket.assigned_user_name || ticket.assigned_name
                 return (
                   <div
                     key={ticket.id}
                     onClick={() => openTicket(ticket)}
                     style={{
-                      padding: '12px 16px',
-                      borderBottom: '1px solid #1a1f2e',
+                      padding: '14px 14px',
+                      borderBottom: `1px solid ${T.borderSoft}`,
                       cursor: 'pointer',
-                      background: isOpen ? '#1a1f30' : isSelected ? '#191d2b' : 'transparent',
+                      background: isOpen ? T.surfaceRaised : isSelected ? T.surfaceHover : 'transparent',
                       transition: 'background 0.1s',
+                      borderLeft: isOpen ? `3px solid ${T.accent}` : '3px solid transparent',
                     }}
-                    onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = '#161927' }}
-                    onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = isSelected ? '#191d2b' : 'transparent' }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -513,44 +573,38 @@ export default function TicketsPage() {
                       <PriorityDot priority={ticket.priority} />
                       <ChannelBadge channel={ticket.channel || 'manual'} />
                       {sl && (
-                        <span style={{ fontSize: 10, color: sl.color, fontFamily: 'var(--font-mono)' }}>{sl.label}</span>
+                        <span style={{ fontSize: 12, color: sl.color, fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{sl.label}</span>
                       )}
-                      <span style={{ fontSize: 11, color: '#334155', marginLeft: 'auto', flexShrink: 0 }}>
+                      <span style={{ fontSize: 12, color: T.faint, marginLeft: 'auto', flexShrink: 0 }}>
                         {timeAgo(ticket.created_at)}
                       </span>
                     </div>
-                    <div style={{ paddingLeft: 50, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500, lineHeight: 1.3 }}>
+                    <div style={{ paddingLeft: 28, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ fontSize: 15, color: T.text, fontWeight: 600, lineHeight: 1.35 }}>
                         {ticket.title}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        {ticket.author && (
-                          <span style={{ fontSize: 11, color: '#64748b' }}>
-                            {ticket.author}{ticket.author_handle ? ` · @${ticket.author_handle}` : ''}
-                            {ticket.follower_count > 0 ? ` · ${(ticket.follower_count / 1000).toFixed(1)}K followers` : ''}
-                          </span>
-                        )}
+                        <AgentChip name={agentName} />
                         <StatusBadge status={ticket.status} />
-                        <span style={{ fontSize: 11, color: ticket.assigned_user_name || ticket.assigned_name ? '#cbd5e1' : '#94a3b8' }}>Agent: {ticket.assigned_user_name || ticket.assigned_name || 'Unassigned'}</span>
-                        {parseInt(ticket.note_count) > 0 && (
-                          <span style={{ fontSize: 11, color: '#475569' }}>💬 {ticket.note_count}</span>
-                        )}
+                        {ticket.lob && <span style={{ fontSize: 11, fontWeight: 700, color:'#67e8f9', letterSpacing:'.04em' }}>{ticket.lob.toUpperCase()}</span>}
                       </div>
+                      {ticket.author && (
+                        <span style={{ fontSize: 13, color: T.muted }}>
+                          {ticket.author}{ticket.author_handle ? ` · @${ticket.author_handle}` : ''}
+                          {ticket.follower_count > 0 ? ` · ${(ticket.follower_count / 1000).toFixed(1)}K followers` : ''}
+                        </span>
+                      )}
                       {ticket.tags?.length > 0 && (
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                           {ticket.tags.slice(0, 3).map(tag => (
-                            <span key={tag} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#1e2535', color: '#64748b' }}>#{tag}</span>
+                            <span key={tag} style={{ fontSize: 12, padding: '2px 7px', borderRadius: 4, background: T.surfaceHover, color: T.muted }}>#{tag}</span>
                           ))}
                         </div>
                       )}
-                      {ticket.lob && <span style={{ fontSize: 10, fontWeight: 700, color:'#67e8f9', letterSpacing:'.04em' }}>{ticket.lob.toUpperCase()}</span>}
                       {mmtEnabled && ticket.customer_labels?.length > 0 && (
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                           {ticket.customer_labels.map(lbl => <CustomerLabelBadge key={lbl} label={lbl} />)}
                         </div>
-                      )}
-                      {mmtEnabled && ticket.reopen_count > 0 && (
-                        <span style={{ fontSize: 10, color: '#f97316' }}>↺ repeat customer</span>
                       )}
                     </div>
                   </div>
@@ -559,246 +613,229 @@ export default function TicketsPage() {
             )}
           </div>
 
-          {/* Ticket detail panel */}
+          {/* Ticket detail — conversation occupies the center */}
           {selectedTicket && (
-            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', display: 'flex', background: '#0b1220' }}>
+            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', display: 'flex', background: T.bg }}>
               {loadingDetail ? (
-                <div style={{ padding: 40, color: '#475569', fontSize: 13 }}>loading...</div>
+                <div style={{ padding: 40, color: T.muted, fontSize: 14 }}>loading...</div>
               ) : ticketDetail ? (
                 <>
                   <div style={{ flex: 1, minWidth: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-                  {/* Detail header */}
-                  <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #1e2535', flexShrink: 0 }}>
+                  {/* Compact header */}
+                  <div style={{ padding: '16px 28px 12px', borderBottom: `1px solid ${T.borderSoft}`, flexShrink: 0, background: T.surface }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                           <ChannelBadge channel={ticketDetail.channel || 'manual'} />
                           <StatusBadge status={ticketDetail.status} />
                           <PriorityDot priority={ticketDetail.priority} />
-                          {sla && <span style={{ fontSize: 11, color: sla.color, fontFamily: 'var(--font-mono)' }}>{sla.label}</span>}
+                          <AgentChip name={ticketDetail.assigned_user_name || ticketDetail.assigned_name} />
+                          {sla && <span style={{ fontSize: 13, color: sla.color, fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{sla.label}</span>}
                         </div>
-                        <h2 style={{ fontSize: 15, fontWeight: 500, color: '#e2e8f0', margin: 0, lineHeight: 1.4 }}>{ticketDetail.title}</h2>
+                        <h2 style={{ fontSize: 20, fontWeight: 650, color: T.text, margin: 0, lineHeight: 1.35 }}>{ticketDetail.title}</h2>
                         {ticketDetail.author && (
-                          <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 0' }}>
+                          <p style={{ fontSize: 14, color: T.muted, margin: '6px 0 0' }}>
                             {ticketDetail.author}
                             {ticketDetail.author_handle ? ` · @${ticketDetail.author_handle}` : ''}
                             {ticketDetail.follower_count > 0 ? ` · ${ticketDetail.follower_count.toLocaleString()} followers` : ''}
+                            <span style={{ color: T.faint }}> · {timeAgo(ticketDetail.created_at)}</span>
                           </p>
                         )}
                         {ticketDetail.url && (
-                          <a href={ticketDetail.url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#3b82f6', textDecoration: 'none' }}>
+                          <a href={ticketDetail.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: '#93c5fd', textDecoration: 'none' }}>
                             view original post ↗
                           </a>
                         )}
                       </div>
                       <button onClick={() => { setSelectedTicket(null); setTicketDetail(null) }}
-                        style={{ ...btnStyle('#1e2535', '#94a3b8'), padding: '4px 10px', fontSize: 12 }}>✕</button>
+                        style={{ ...btnStyle(T.surfaceRaised, T.muted), padding: '6px 12px', fontSize: 13 }}>✕</button>
                     </div>
 
-                    {/* Status actions */}
                     <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
                       {STATUS_TABS.slice(1).map(s => (
                         <button
                           key={s.key}
                           onClick={() => updateTicketStatus(ticketDetail.id, s.key)}
                           style={{
-                            ...btnStyle(ticketDetail.status === s.key ? s.color + '22' : '#1e2535', ticketDetail.status === s.key ? s.color : '#64748b'),
-                            border: `1px solid ${ticketDetail.status === s.key ? s.color + '44' : '#1e2535'}`,
-                            padding: '4px 12px',
-                            fontSize: 11,
+                            ...btnStyle(ticketDetail.status === s.key ? s.color + '22' : T.surfaceRaised, ticketDetail.status === s.key ? s.color : T.muted),
+                            border: `1px solid ${ticketDetail.status === s.key ? s.color + '44' : T.border}`,
+                            padding: '5px 12px',
+                            fontSize: 13,
                           }}
                         >{s.label}</button>
                       ))}
                     </div>
 
-                    {mmtEnabled && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                        <button
-                          onClick={() => api.updateTicket(slug, ticketDetail.id, { is_sticky: !ticketDetail.is_sticky }).then(() => {
-                            setTicketDetail(d => ({ ...d, is_sticky: !d.is_sticky }))
-                          })}
-                          style={{
-                            ...btnStyle(ticketDetail.is_sticky ? '#fbbf2422' : '#1e2535', ticketDetail.is_sticky ? '#fbbf24' : '#475569'),
-                            border: `1px solid ${ticketDetail.is_sticky ? '#fbbf2444' : '#1e2535'}`,
-                            padding: '3px 10px', fontSize: 11,
-                          }}
-                        >
-                          {ticketDetail.is_sticky ? '📌 sticky' : '📌 pin'}
-                        </button>
-                        {ticketDetail.awaiting_customer && (
-                          <span style={{ fontSize: 11, color: '#fb923c', fontWeight: 500 }}>⏳ awaiting agent response</span>
-                        )}
+                    {/* Inline metadata & tags — visible without opening tools */}
+                    <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: T.surfaceRaised, border: `1px solid ${T.borderSoft}` }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10 }}>
+                        <div>
+                          <label style={miniLabel}>Line of business</label>
+                          <select value={metadataDraft.lob} onChange={e => setMetadataDraft(d => ({ ...d, lob: e.target.value }))} style={selectStyle({ width: '100%' })}>
+                            <option value="">Unclassified</option>
+                            {LOB_OPTIONS.map(lob => <option key={lob} value={lob}>{lob}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={miniLabel}>Booking ID</label>
+                          <input value={metadataDraft.booking_id} onChange={e => setMetadataDraft(d => ({ ...d, booking_id: e.target.value }))} style={inputStyle({ width: '100%' })} placeholder="Booking / case ID" />
+                        </div>
+                        <div>
+                          <label style={miniLabel}>Contact email</label>
+                          <input value={metadataDraft.contact_email} onChange={e => setMetadataDraft(d => ({ ...d, contact_email: e.target.value }))} style={inputStyle({ width: '100%' })} placeholder="customer@email.com" />
+                        </div>
+                        <div>
+                          <label style={miniLabel}>Contact phone</label>
+                          <input value={metadataDraft.contact_phone} onChange={e => setMetadataDraft(d => ({ ...d, contact_phone: e.target.value }))} style={inputStyle({ width: '100%' })} placeholder="Phone" />
+                        </div>
+                        <div>
+                          <label style={miniLabel}>Use case</label>
+                          <input value={metadataDraft.use_case} onChange={e => setMetadataDraft(d => ({ ...d, use_case: e.target.value }))} style={inputStyle({ width: '100%' })} placeholder="refund, delay…" />
+                        </div>
                       </div>
-                    )}
-
-                    {/* Assigned */}
-                    <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 11, color: '#475569' }}>assigned to:</span>
-                      <span style={{ fontSize: 12, color: ticketDetail.assigned_user_name ? '#e2e8f0' : '#334155' }}>
-                        {ticketDetail.assigned_user_name || 'unassigned'}
-                      </span>
-                      <span style={{ fontSize: 11, color: '#334155' }}>· {timeAgo(ticketDetail.created_at)}</span>
-                    </div>
-
-                    {/* Tags */}
-                    {ticketDetail.tags?.length > 0 && (
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8 }}>
-                        {ticketDetail.tags.map(tag => (
-                          <span key={tag} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, background: '#1e2535', color: '#64748b' }}>#{tag}</span>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button onClick={saveMetadata} disabled={saving} style={btnStyle(T.accent, '#fff')}>{saving ? 'saving…' : 'Save metadata'}</button>
+                        {(ticketDetail.tags || []).map(tag => (
+                          <button key={tag} onClick={() => saveTags((ticketDetail.tags || []).filter(t => t !== tag))} style={{ fontSize: 13, padding: '4px 10px', borderRadius: 99, background: T.surfaceHover, color: T.textSecondary, border: `1px solid ${T.border}`, cursor: 'pointer' }}>#{tag} ×</button>
                         ))}
+                        <input value={tagDraft} onChange={e => setTagDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag() } }} placeholder="Add tag" style={inputStyle({ width: 140 })} />
+                        <button onClick={addTag} style={btnStyle(T.surfaceHover, T.muted)}>tag</button>
                       </div>
-                    )}
-
-                    {/* MMT customer labels in detail */}
-                    {mmtEnabled && ticketDetail.customer_labels?.length > 0 && (
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8 }}>
-                        {ticketDetail.customer_labels.map(lbl => <CustomerLabelBadge key={lbl} label={lbl} />)}
-                      </div>
-                    )}
+                    </div>
                   </div>
 
-                  {/* Body */}
-                  {ticketDetail.body && (
-                    <div style={{ padding: '16px 24px', borderBottom: '1px solid #1e2535', flexShrink: 0 }}>
-                      <p style={{ fontSize: 13, color: '#94a3b8', margin: 0, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{ticketDetail.body}</p>
-                    </div>
-                  )}
+                  {/* Conversation thread — primary reading surface */}
+                  <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px', background: T.bg }}>
+                    <p style={{ fontSize: 12, color: T.muted, margin: '0 0 14px', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Conversation</p>
 
-                  {/* Notes thread */}
-                  <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px' }}>
-                    <p style={{ fontSize: 11, color: '#475569', margin: '0 0 12px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Notes & Activity</p>
+                    {ticketDetail.body && (
+                      <div style={{
+                        marginBottom: 16,
+                        padding: '16px 18px',
+                        borderRadius: 12,
+                        background: T.surface,
+                        border: `1px solid ${T.border}`,
+                        maxWidth: 860,
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                          <span style={{ fontSize: 13, color: T.muted, fontWeight: 600 }}>Customer</span>
+                          <span style={{ fontSize: 12, color: T.faint }}>{timeAgo(ticketDetail.created_at)}</span>
+                        </div>
+                        <p style={{ fontSize: 16, color: T.text, margin: 0, lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{ticketDetail.body}</p>
+                      </div>
+                    )}
 
-                    {notes.length === 0 ? (
-                      <p style={{ fontSize: 12, color: '#334155' }}>no notes yet</p>
+                    {notes.length === 0 && !ticketDetail.body ? (
+                      <p style={{ fontSize: 14, color: T.muted }}>No conversation yet</p>
                     ) : (
                       notes.map(note => (
                         <div key={note.id} style={{
-                          marginBottom: 12,
-                          padding: '10px 14px',
-                          borderRadius: 8,
-                          background: note.is_internal ? '#191d2b' : '#1a1f30',
-                          border: `1px solid ${note.is_internal ? '#1e2535' : '#2d3748'}`,
+                          marginBottom: 14,
+                          padding: '14px 18px',
+                          borderRadius: 12,
+                          background: note.is_internal ? T.surfaceRaised : T.surface,
+                          border: `1px solid ${note.is_internal ? T.borderSoft : T.border}`,
+                          maxWidth: 860,
+                          marginLeft: note.is_internal ? 0 : 24,
                         }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                            <span style={{ fontSize: 11, color: '#64748b' }}>
-                              {note.author_name || 'agent'} · {note.is_internal ? '🔒 internal' : '📤 reply'}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 13, color: T.textSecondary, fontWeight: 600 }}>
+                              {note.author_name || 'Agent'} · {note.is_internal ? '🔒 internal' : '📤 reply'}
                             </span>
-                            <span style={{ fontSize: 11, color: '#334155' }}>{timeAgo(note.created_at)}</span>
+                            <span style={{ fontSize: 12, color: T.faint }}>{timeAgo(note.created_at)}</span>
                           </div>
-                          <p style={{ fontSize: 13, color: '#cbd5e1', margin: 0, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{note.body}</p>
+                          <p style={{ fontSize: 15, color: T.text, margin: 0, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{note.body}</p>
                         </div>
                       ))
                     )}
 
-                    {/* Add note */}
-                    <div style={{ marginTop: 16 }}>
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                        <button
-                          onClick={() => setNoteIsInternal(true)}
-                          style={btnStyle(noteIsInternal ? '#1e2535' : 'transparent', noteIsInternal ? '#94a3b8' : '#475569')}
-                        >🔒 internal note</button>
-                        <button
-                          onClick={() => setNoteIsInternal(false)}
-                          style={btnStyle(!noteIsInternal ? '#1e2535' : 'transparent', !noteIsInternal ? '#94a3b8' : '#475569')}
-                        >📤 reply</button>
-                        <button
-                          onClick={() => setShowCanned(true)}
-                          style={{ ...btnStyle('transparent', '#475569'), marginLeft: 'auto' }}
-                        >canned ↗</button>
+                    {/* Composer */}
+                    <div style={{ marginTop: 20, maxWidth: 860, position: 'sticky', bottom: 0, background: T.bg, paddingBottom: 8 }}>
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                        <button onClick={() => setNoteIsInternal(true)} style={btnStyle(noteIsInternal ? T.surfaceRaised : 'transparent', noteIsInternal ? T.textSecondary : T.faint)}>🔒 internal note</button>
+                        <button onClick={() => setNoteIsInternal(false)} style={btnStyle(!noteIsInternal ? T.surfaceRaised : 'transparent', !noteIsInternal ? T.textSecondary : T.faint)}>📤 reply</button>
+                        <button onClick={() => setShowCanned(true)} style={{ ...btnStyle('transparent', T.faint), marginLeft: 'auto' }}>canned ↗</button>
                       </div>
                       <textarea
                         value={noteBody}
                         onChange={e => setNoteBody(e.target.value)}
                         placeholder={noteIsInternal ? 'add internal note...' : 'write reply...'}
-                        rows={3}
-                        style={{ ...inputStyle({ width: '100%', resize: 'vertical' }), fontFamily: 'inherit' }}
+                        rows={4}
+                        style={{ ...inputStyle({ width: '100%', resize: 'vertical', fontSize: 15 }), fontFamily: 'inherit' }}
                       />
                       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                        <button onClick={submitNote} disabled={saving || !noteBody.trim()} style={btnStyle('#3b82f6', '#fff')}>
+                        <button onClick={submitNote} disabled={saving || !noteBody.trim()} style={btnStyle(T.accent, '#fff')}>
                           {saving ? 'saving...' : noteIsInternal ? 'add note' : 'send reply'}
                         </button>
                       </div>
                     </div>
 
-                    {/* Forward to CD Lead */}
-                    <div style={{ marginTop: 20, padding: '12px 14px', borderRadius: 8, background: '#191d2b', border: '1px solid #1e2535' }}>
-                      <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Forward to CD Lead</p>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <input
-                          value={forwardEmail}
-                          onChange={e => setForwardEmail(e.target.value)}
-                          placeholder="email@example.com, email2@example.com"
-                          style={inputStyle({ flex: 1 })}
-                        />
-                        <button onClick={forwardTicket} style={btnStyle('#1e2535', '#94a3b8')}>forward</button>
-                      </div>
-                    </div>
-
-                    {/* MMT translation */}
-                    {mmtEnabled && ticketDetail.body && (
-                      <div style={{ marginTop: 20, padding: '12px 14px', borderRadius: 8, background: '#191d2b', border: '1px solid #1e2535' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                          <p style={{ fontSize: 11, color: '#64748b', margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Translate</p>
-                          <button onClick={translateTicket} disabled={translateLoading} style={{ ...btnStyle('#1e2535', '#94a3b8'), fontSize: 11, padding: '3px 10px' }}>
-                            {translateLoading ? 'translating...' : '🌐 to English'}
-                          </button>
+                    {/* Secondary tools under conversation */}
+                    <div style={{ marginTop: 28, maxWidth: 860, display: 'grid', gap: 12 }}>
+                      <div style={{ padding: '12px 14px', borderRadius: 10, background: T.surface, border: `1px solid ${T.borderSoft}` }}>
+                        <p style={{ fontSize: 12, color: T.muted, margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Forward to CD Lead</p>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <input value={forwardEmail} onChange={e => setForwardEmail(e.target.value)} placeholder="email@example.com" style={inputStyle({ flex: 1 })} />
+                          <button onClick={forwardTicket} style={btnStyle(T.surfaceRaised, T.muted)}>forward</button>
                         </div>
-                        {translatedText && (
-                          <p style={{ fontSize: 13, color: '#94a3b8', margin: 0, lineHeight: 1.6, fontStyle: 'italic' }}>{translatedText}</p>
-                        )}
                       </div>
-                    )}
 
-                    {/* AI Response generator */}
-                    <div style={{ marginTop: 20, padding: '14px', borderRadius: 8, background: '#191d2b', border: '1px solid #1e2535' }}>
-                      <p style={{ fontSize: 11, color: '#64748b', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>AI Response Generator</p>
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                        {PERSONALITIES.map(p => (
-                          <button
-                            key={p}
-                            onClick={() => setAiPersonality(p)}
-                            style={btnStyle(aiPersonality === p ? '#3b82f622' : 'transparent', aiPersonality === p ? '#3b82f6' : '#475569')}
-                          >{p}</button>
-                        ))}
-                      </div>
-                      <button onClick={generateAIResponse} disabled={loadingAI} style={btnStyle('#3b82f6', '#fff')}>
-                        {loadingAI ? 'generating...' : 'generate responses'}
-                      </button>
-                      {aiResponses.length > 0 && (
-                        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          {aiResponses.map((r, i) => (
-                            <div key={i} style={{ padding: '10px 12px', borderRadius: 6, background: '#12151e', border: '1px solid #1e2535' }}>
-                              <p style={{ fontSize: 13, color: '#cbd5e1', margin: '0 0 8px', lineHeight: 1.5 }}>{r}</p>
-                              <button
-                                onClick={() => { setNoteBody(r); setNoteIsInternal(false) }}
-                                style={{ ...btnStyle('#1e2535', '#64748b'), fontSize: 11, padding: '3px 10px' }}
-                              >use this</button>
-                            </div>
-                          ))}
+                      {mmtEnabled && ticketDetail.body && (
+                        <div style={{ padding: '12px 14px', borderRadius: 10, background: T.surface, border: `1px solid ${T.borderSoft}` }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                            <p style={{ fontSize: 12, color: T.muted, margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Translate</p>
+                            <button onClick={translateTicket} disabled={translateLoading} style={{ ...btnStyle(T.surfaceRaised, T.muted), fontSize: 12, padding: '4px 10px' }}>
+                              {translateLoading ? 'translating...' : '🌐 to English'}
+                            </button>
+                          </div>
+                          {translatedText && <p style={{ fontSize: 15, color: T.muted, margin: 0, lineHeight: 1.6, fontStyle: 'italic' }}>{translatedText}</p>}
                         </div>
                       )}
-                    </div>
+
+                      <div style={{ padding: 14, borderRadius: 10, background: T.surface, border: `1px solid ${T.borderSoft}` }}>
+                        <p style={{ fontSize: 12, color: T.muted, margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>AI Response Generator</p>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                          {PERSONALITIES.map(p => (
+                            <button key={p} onClick={() => setAiPersonality(p)} style={btnStyle(aiPersonality === p ? T.accentSoft : 'transparent', aiPersonality === p ? T.accent : T.faint)}>{p}</button>
+                          ))}
+                        </div>
+                        <button onClick={generateAIResponse} disabled={loadingAI} style={btnStyle(T.accent, '#fff')}>
+                          {loadingAI ? 'generating...' : 'generate responses'}
+                        </button>
+                        {aiResponses.length > 0 && (
+                          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {aiResponses.map((r, i) => (
+                              <div key={i} style={{ padding: '10px 12px', borderRadius: 8, background: T.bg, border: `1px solid ${T.borderSoft}` }}>
+                                <p style={{ fontSize: 14, color: T.textSecondary, margin: '0 0 8px', lineHeight: 1.55 }}>{r}</p>
+                                <button onClick={() => { setNoteBody(r); setNoteIsInternal(false) }} style={{ ...btnStyle(T.surfaceRaised, T.muted), fontSize: 12, padding: '4px 10px' }}>use this</button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <aside style={{ width: toolsOpen ? 300 : 42, flexShrink: 0, overflow: 'auto', borderLeft: '1px solid #334155', background: '#111827', transition: 'width .15s ease' }}>
-                    <button onClick={() => setToolsOpen(open => !open)} aria-expanded={toolsOpen} style={{ width:'100%', padding:'12px', background:'transparent', border:0, borderBottom:'1px solid #334155', color:'#e2e8f0', textAlign:toolsOpen?'left':'center', fontSize:12, fontWeight:700 }}>{toolsOpen ? 'Ticket controls  ›' : '‹'}</button>
+                  </div>
+
+                  {/* Collapsible side tools */}
+                  <aside style={{ width: toolsOpen ? 280 : 44, flexShrink: 0, overflow: 'auto', borderLeft: `1px solid ${T.border}`, background: T.surface, transition: 'width .15s ease' }}>
+                    <button onClick={() => setToolsOpen(open => !open)} aria-expanded={toolsOpen} style={{ width:'100%', padding:'14px', background:'transparent', border:0, borderBottom:`1px solid ${T.borderSoft}`, color: T.text, textAlign: toolsOpen ? 'left' : 'center', fontSize:13, fontWeight:700 }}>
+                      {toolsOpen ? 'Controls ›' : '‹'}
+                    </button>
                     {toolsOpen && <div style={{ padding:14 }}>
-                      <p style={panelLabel}>OWNER</p>
-                      <select value={ticketDetail.assigned_to || ''} onChange={e => updateAssignee(e.target.value)} style={{ ...selectStyle({ width:'100%' }), fontSize:13 }}>
+                      <p style={panelLabel}>OWNER / AGENT</p>
+                      <select value={ticketDetail.assigned_to || ''} onChange={e => updateAssignee(e.target.value)} style={{ ...selectStyle({ width:'100%' }), fontSize:14 }}>
                         <option value="">Unassigned</option>
                         {members.map(member => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}
                       </select>
-                      <p style={{ fontSize:12, color:'#cbd5e1', margin:'8px 0 18px' }}>Agent: {ticketDetail.assigned_user_name || ticketDetail.assigned_name || 'Unassigned'}</p>
+                      <p style={{ fontSize:14, color: T.textSecondary, margin:'10px 0 18px', fontWeight: 600 }}>
+                        {ticketDetail.assigned_user_name || ticketDetail.assigned_name || 'Unassigned'}
+                      </p>
 
-                      <p style={panelLabel}>CUSTOM METADATA</p>
-                      <label style={miniLabel}>Line of business</label>
-                      <select value={metadataDraft.lob} onChange={e => setMetadataDraft(d => ({ ...d, lob:e.target.value }))} style={selectStyle({ width:'100%' })}><option value="">Unclassified</option>{LOB_OPTIONS.map(lob => <option key={lob} value={lob}>{lob}</option>)}</select>
-                      <label style={miniLabel}>Booking ID</label><input value={metadataDraft.booking_id} onChange={e => setMetadataDraft(d => ({ ...d, booking_id:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="Booking / case ID" />
-                      <label style={miniLabel}>Contact email</label><input value={metadataDraft.contact_email} onChange={e => setMetadataDraft(d => ({ ...d, contact_email:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="customer@email.com" />
-                      <label style={miniLabel}>Contact phone</label><input value={metadataDraft.contact_phone} onChange={e => setMetadataDraft(d => ({ ...d, contact_phone:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="Phone number" />
-                      <label style={miniLabel}>Use case</label><input value={metadataDraft.use_case} onChange={e => setMetadataDraft(d => ({ ...d, use_case:e.target.value }))} style={inputStyle({width:'100%'})} placeholder="e.g. refund, cancellation" />
-                      <button onClick={saveMetadata} disabled={saving} style={{ ...btnStyle('#2563eb','#fff'), marginTop:12, width:'100%', fontSize:13 }}>{saving ? 'saving…' : 'save metadata'}</button>
-                      <div style={{ marginTop:18, paddingTop:14, borderTop:'1px solid #334155' }}><p style={panelLabel}>DATA ACCESS</p><p style={{fontSize:11,color:'#94a3b8',lineHeight:1.5,margin:'0 0 8px'}}>CSV is Excel-ready and includes tags, LOB, owner, SLA and custom fields.</p><button onClick={downloadRawData} disabled={exporting} style={{...btnStyle('#1e293b','#e2e8f0'),width:'100%'}}>{exporting ? 'exporting…' : 'download CSV'}</button><code style={{display:'block',overflowWrap:'anywhere',fontSize:10,color:'#93c5fd',marginTop:10}}>/api/orgs/{slug}/tickets/export?format=json</code></div>
+                      <p style={panelLabel}>DATA ACCESS</p>
+                      <p style={{fontSize:13,color:T.muted,lineHeight:1.5,margin:'0 0 8px'}}>CSV includes tags, LOB, booking/contact fields, owner and SLA. JSON works with Power BI / Tableau via bearer token.</p>
+                      <button onClick={downloadRawData} disabled={exporting} style={{...btnStyle(T.surfaceRaised, T.textSecondary),width:'100%', marginBottom:8}}>{exporting ? 'exporting…' : 'Download CSV'}</button>
+                      <code style={{display:'block',overflowWrap:'anywhere',fontSize:12,color:'#93c5fd',lineHeight:1.45}}>/api/orgs/{slug}/tickets/export?format=json</code>
                     </div>}
                   </aside>
                 </>
@@ -977,12 +1014,12 @@ function Modal({ title, onClose, children, wide }) {
 
 function btnStyle(bg, color) {
   return {
-    padding: '6px 14px',
+    padding: '7px 14px',
     background: bg,
     color,
     border: 'none',
     borderRadius: 6,
-    fontSize: 12,
+    fontSize: 13,
     cursor: 'pointer',
     fontFamily: 'inherit',
     transition: 'opacity 0.12s',
@@ -992,12 +1029,12 @@ function btnStyle(bg, color) {
 
 function inputStyle(extra = {}) {
   return {
-    background: '#191d2b',
-    border: '1px solid #1e2535',
+    background: T.surfaceRaised,
+    border: `1px solid ${T.border}`,
     borderRadius: 6,
-    color: '#e2e8f0',
-    fontSize: 13,
-    padding: '6px 10px',
+    color: T.text,
+    fontSize: 14,
+    padding: '8px 10px',
     fontFamily: 'inherit',
     outline: 'none',
     ...extra,
@@ -1014,12 +1051,12 @@ function selectStyle(extra = {}) {
 
 const labelStyle = {
   display: 'block',
-  fontSize: 11,
-  color: '#64748b',
+  fontSize: 12,
+  color: T.muted,
   marginBottom: 4,
   marginTop: 12,
   textTransform: 'uppercase',
   letterSpacing: '0.06em',
 }
-const panelLabel = { fontSize:10, color:'#94a3b8', fontWeight:800, letterSpacing:'.1em', margin:'0 0 8px' }
-const miniLabel = { display:'block', fontSize:11, color:'#cbd5e1', margin:'12px 0 4px' }
+const panelLabel = { fontSize:11, color: T.muted, fontWeight:800, letterSpacing:'.1em', margin:'0 0 8px' }
+const miniLabel = { display:'block', fontSize:12, color: T.muted, margin:'0 0 4px', fontWeight: 600 }

@@ -94,8 +94,8 @@ export default function OrgNav({ slug }) {
         left: 0,
         right: 0,
         height: 56,
-        background: '#12151e',
-        borderTop: '1px solid #1e2535',
+        background: '#0f1420',
+        borderTop: '1px solid #3d4a63',
         display: 'flex',
         alignItems: 'stretch',
         zIndex: 50,
@@ -113,8 +113,8 @@ export default function OrgNav({ slug }) {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 3,
-                color: active ? '#e2e8f0' : '#64748b',
-                fontSize: 10,
+                color: active ? '#f8fafc' : '#a8b4c8',
+                fontSize: 11,
                 fontFamily: 'var(--font-sans), system-ui, sans-serif',
                 letterSpacing: '0.04em',
                 textDecoration: 'none',
@@ -162,8 +162,8 @@ export default function OrgNav({ slug }) {
       left: 0,
       bottom: 0,
       width: 208,
-      background: '#12151e',
-      borderRight: '1px solid #1e2535',
+      background: '#0f1420',
+      borderRight: '1px solid #3d4a63',
       display: 'flex',
       flexDirection: 'column',
       zIndex: 50,
@@ -171,10 +171,10 @@ export default function OrgNav({ slug }) {
       {/* Logo + org switcher */}
       <div style={{ padding: '20px 16px 16px', borderBottom: '1px solid #1e2535' }}>
         <div style={{
-          fontSize: 13,
-          fontWeight: 500,
-          letterSpacing: '0.25em',
-          color: '#94a3b8',
+          fontSize: 14,
+          fontWeight: 600,
+          letterSpacing: '0.2em',
+          color: '#e2e8f0',
           marginBottom: 12,
         }}>
           spill
@@ -286,9 +286,9 @@ export default function OrgNav({ slug }) {
                 padding: '8px 10px',
                 borderRadius: 8,
                 marginBottom: 2,
-                color: active ? '#e2e8f0' : '#94a3b8',
-                background: active ? '#1a1f2e' : 'transparent',
-                fontSize: 13,
+                color: active ? '#f8fafc' : '#a8b4c8',
+                background: active ? '#1a2233' : 'transparent',
+                fontSize: 14,
                 fontWeight: active ? 500 : 400,
                 transition: 'all 0.12s ease',
                 textDecoration: 'none',
@@ -297,17 +297,17 @@ export default function OrgNav({ slug }) {
               onMouseEnter={e => {
                 if (!active) {
                   e.currentTarget.style.background = '#191d2b'
-                  e.currentTarget.style.color = '#e2e8f0'
+                  e.currentTarget.style.color = '#f8fafc'
                 }
               }}
               onMouseLeave={e => {
                 if (!active) {
                   e.currentTarget.style.background = 'transparent'
-                  e.currentTarget.style.color = '#94a3b8'
+                  e.currentTarget.style.color = '#a8b4c8'
                 }
               }}
             >
-              <span style={{ fontSize: 11, color: active ? '#60a5fa' : 'inherit' }}>{item.icon}</span>
+              <span style={{ fontSize: 12, color: active ? '#60a5fa' : 'inherit' }}>{item.icon}</span>
               {item.label}
             </Link>
           )
@@ -317,8 +317,8 @@ export default function OrgNav({ slug }) {
       {/* User + sign out */}
       <div style={{ padding: '12px 16px', borderTop: '1px solid #1e2535' }}>
         <div style={{
-          fontSize: 11.5,
-          color: '#64748b',
+          fontSize: 13,
+          color: '#a8b4c8',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',

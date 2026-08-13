@@ -60,6 +60,10 @@ export async function GET(request, { params }) {
       conditions.push(`t.status <> 'closed' AND (t.priority IN ('urgent','high') OR t.sla_breached = true OR t.sla_first_response_at < NOW() + INTERVAL '30 minutes')`);
     } else if (queue === 'pending_customer') {
       conditions.push(`t.status <> 'closed' AND (t.awaiting_customer = true OR t.status = 'awaiting')`);
+    } else if (queue === 'sla_breached') {
+      conditions.push(`t.status <> 'closed' AND (t.sla_breached = true OR COALESCE(t.sla_first_response_at, t.sla_subsequent_at) < NOW())`);
+    } else if (queue === 'unassigned') {
+      conditions.push(`t.status <> 'closed' AND t.assigned_to IS NULL`);
     }
 
     const where = conditions.join(' AND ');
@@ -91,7 +95,9 @@ export async function GET(request, { params }) {
         `SELECT
           COUNT(*) FILTER (WHERE status <> 'closed' AND first_responded_at IS NULL AND created_at < NOW() - INTERVAL '48 hours') AS unanswered_48h,
           COUNT(*) FILTER (WHERE status <> 'closed' AND (priority IN ('urgent','high') OR sla_breached = true OR sla_first_response_at < NOW() + INTERVAL '30 minutes')) AS expedited,
-          COUNT(*) FILTER (WHERE status <> 'closed' AND (awaiting_customer = true OR status = 'awaiting')) AS pending_customer
+          COUNT(*) FILTER (WHERE status <> 'closed' AND (awaiting_customer = true OR status = 'awaiting')) AS pending_customer,
+          COUNT(*) FILTER (WHERE status <> 'closed' AND (sla_breached = true OR COALESCE(sla_first_response_at, sla_subsequent_at) < NOW())) AS sla_breached,
+          COUNT(*) FILTER (WHERE status <> 'closed' AND assigned_to IS NULL) AS unassigned
          FROM tickets WHERE org_id=$1`, [access.orgId]
       ),
       query(
