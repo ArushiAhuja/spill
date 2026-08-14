@@ -1,6 +1,6 @@
 import { query } from './db.js';
 import { linkTraceToPost, recordTraceObservation } from './observability.js';
-import { orchestrateOverrideLearning } from './feedback.js';
+import { orchestrateOverrideLearning, orchestrateTraceSuppressLearning } from './feedback.js';
 import { stripHtmlNoise } from './relevance-policy.js';
 
 export function extractCandidateFromTrace(trace, observations = []) {
@@ -382,6 +382,184 @@ export async function overrideTraceToDashboard({ traceId, user, note = '' }) {
     decision: 'surfaced_override',
     previous_decision: previousDecision,
     dashboard_path: `/${trace.org_slug}`,
+    candidate,
+    learning,
+  };
+}
+
+const SUPPRESS_LABELS = new Set(['not_relevant', 'too_generic', 'wrong_geography', 'unrelated_complaint', 'false_positive']);
+
+export async function confirmTraceSuppression({ traceId, user, label = 'not_relevant', note = '' }) {
+  const feedbackLabel = SUPPRESS_LABELS.has(label) ? label : 'not_relevant';
+  const { rows: traces } = await query(
+    `SELECT t.*, o.name AS org_name, o.slug AS org_slug
+     FROM ai_traces t
+     JOIN organizations o ON o.id = t.org_id
+     WHERE t.id::text = $1 OR t.trace_key = $1`,
+    [traceId]
+  );
+  const trace = traces[0];
+  if (!trace) {
+    const err = new Error('trace not found');
+    err.status = 404;
+    throw err;
+  }
+
+  const { rows: observations } = await query(
+    'SELECT * FROM ai_observations WHERE trace_id=$1 ORDER BY created_at',
+    [trace.id]
+  );
+  const candidate = extractCandidateFromTrace(trace, observations);
+  if (!candidate.title && !candidate.body) {
+    const err = new Error('trace has no recoverable source content for suppression feedback');
+    err.status = 400;
+    throw err;
+  }
+
+  const suppressNote = String(note || '').trim().slice(0, 1000);
+  const previousDecision = trace.decision;
+  let postId = trace.post_id;
+
+  if (postId) {
+    await query(
+      `UPDATE posts SET
+         post_status = 'dismissed',
+         dismiss_reason = $2,
+         reviewed = true,
+         snoozed_until = NULL
+       WHERE id = $1 AND org_id = $3`,
+      [postId, suppressNote || feedbackLabel.replace(/_/g, ' '), trace.org_id]
+    );
+  } else {
+    const { rows: [inserted] } = await query(
+      `INSERT INTO posts (
+         org_id, source, external_id, title, body, author, url, raw_engagement,
+         escalation_score, sentiment_intensity, reasoning, escalated,
+         post_created_at, manually_escalated, reviewed, ai_trace_id, post_status, dismiss_reason
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,
+         0,0,$9,false,
+         NOW(), false, true, $10, 'dismissed', $11
+       )
+       ON CONFLICT (org_id, source, external_id) DO UPDATE SET
+         title = EXCLUDED.title,
+         body = EXCLUDED.body,
+         post_status = 'dismissed',
+         dismiss_reason = EXCLUDED.dismiss_reason,
+         reviewed = true,
+         ai_trace_id = EXCLUDED.ai_trace_id
+       RETURNING id`,
+      [
+        trace.org_id,
+        candidate.source,
+        candidate.external_id,
+        candidate.title,
+        candidate.body,
+        candidate.author,
+        candidate.url,
+        candidate.engagement,
+        `Operator confirmed: should not surface (${feedbackLabel.replace(/_/g, ' ')}).`,
+        trace.id,
+        suppressNote || feedbackLabel.replace(/_/g, ' '),
+      ]
+    );
+    postId = inserted.id;
+    await linkTraceToPost(trace.id, postId);
+  }
+
+  const decisionEvidence = {
+    ...(trace.decision_evidence || {}),
+    operator_suppression: {
+      at: new Date().toISOString(),
+      by_user_id: user?.id || null,
+      by_email: user?.email || null,
+      previous_decision: previousDecision,
+      label: feedbackLabel,
+      note: suppressNote || null,
+    },
+  };
+
+  await query(
+    `UPDATE ai_traces
+     SET decision = 'confirmed_suppression',
+         post_id = $2,
+         decision_evidence = $3,
+         metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
+         status = 'completed',
+         completed_at = NOW()
+     WHERE id = $1`,
+    [
+      trace.id,
+      postId,
+      JSON.stringify(decisionEvidence),
+      JSON.stringify({
+        title: candidate.title,
+        body: candidate.body,
+        url: candidate.url,
+        author: candidate.author,
+        external_id: candidate.external_id,
+        operator_confirmed_suppression: true,
+        suppression_label: feedbackLabel,
+      }),
+    ]
+  );
+
+  await recordTraceObservation(trace.id, {
+    name: 'Operator Suppression',
+    kind: 'event',
+    model: 'human-operator',
+    promptKey: null,
+    input: {
+      previous_decision: previousDecision,
+      label: feedbackLabel,
+      note: suppressNote || null,
+      operator: { id: user?.id || null, email: user?.email || null },
+    },
+    output: {
+      decision: 'confirmed_suppression',
+      post_id: postId,
+      feedback_label: feedbackLabel,
+    },
+  });
+
+  let learning = null;
+  try {
+    const { rows: [postRow] } = await query(
+      `SELECT id, title, body, source, category_id, escalation_score, escalated, ai_trace_id
+       FROM posts WHERE id=$1 AND org_id=$2`,
+      [postId, trace.org_id]
+    );
+    learning = await orchestrateTraceSuppressLearning({
+      orgId: trace.org_id,
+      post: postRow || {
+        id: postId,
+        title: candidate.title,
+        body: candidate.body,
+        source: candidate.source,
+        category_id: trace.decision_evidence?.category?.id || null,
+        ai_trace_id: trace.id,
+      },
+      traceId: trace.id,
+      eventId: trace.event_id || postId,
+      previousDecision,
+      label: feedbackLabel,
+      note: suppressNote,
+      authorEmail: user?.email || null,
+    });
+  } catch (err) {
+    console.warn('[confirmTraceSuppression] learning orchestration skipped:', err.message);
+    learning = { error: err.message };
+  }
+
+  return {
+    trace_id: trace.id,
+    post_id: postId,
+    org_id: trace.org_id,
+    org_slug: trace.org_slug,
+    org_name: trace.org_name,
+    decision: 'confirmed_suppression',
+    previous_decision: previousDecision,
+    label: feedbackLabel,
     candidate,
     learning,
   };

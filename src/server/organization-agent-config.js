@@ -2,7 +2,7 @@ import { query } from './db.js';
 
 export const AGENT_DEFINITIONS = [
   { agent_name: 'source_understanding', prompt_key: null, name: 'Source Understanding Agent', model: 'deterministic-policy' },
-  { agent_name: 'relevance', prompt_key: 'relevance_filter', name: 'Relevance Agent', model: 'gpt-4o-mini' },
+  { agent_name: 'relevance', prompt_key: 'relevance_filter', name: 'Relevance Agent', model: 'gpt-4o' },
   { agent_name: 'category', prompt_key: 'classifier_system', name: 'Category Classification Agent', model: 'gpt-4o-mini' },
   { agent_name: 'severity', prompt_key: 'classifier_scoring', name: 'Severity Agent', model: 'deterministic-policy' },
   { agent_name: 'summary', prompt_key: null, name: 'Executive Summary Agent', model: 'deterministic-policy' },
@@ -13,6 +13,12 @@ export const AGENT_DEFINITIONS = [
 
 export function agentForPrompt(promptKey) {
   return AGENT_DEFINITIONS.find(agent => agent.prompt_key === promptKey) || null;
+}
+
+/** Upgrade legacy relevance runs from mini to full model for better homonym judgment. */
+export function preferredRelevanceModel(currentModel) {
+  if (currentModel === 'gpt-4o-mini') return 'gpt-4o';
+  return currentModel || 'gpt-4o';
 }
 
 function defaultConfig(definition) {

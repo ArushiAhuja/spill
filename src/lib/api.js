@@ -176,6 +176,7 @@ export const api = {
     return request('GET', `/internal/observability/traces${qs ? `?${qs}` : ''}`)
   },
   overrideObservabilityTrace: (trace_id, note = '') => request('POST', '/internal/observability/traces', { action: 'override', trace_id, note }),
+  confirmObservabilityTraceSuppression: (trace_id, { label = 'not_relevant', note = '' } = {}) => request('POST', '/internal/observability/traces', { action: 'confirm_suppression', trace_id, label, note }),
   getObservabilityOperators: () => request('GET', '/internal/observability/operators'),
   setObservabilityOperator: (email, granted, org_id = null) => request('POST', '/internal/observability/operators', { email, granted, org_id }),
   createObservabilityWorkspace: (body) => request('POST', '/internal/observability/workspaces', body),

@@ -1,9 +1,14 @@
 import OpenAI from 'openai';
 import { query } from './db.js';
-import { getOrganizationAgentConfig, saveOrganizationAgentConfig } from './organization-agent-config.js';
+import { getOrganizationAgentConfig, saveOrganizationAgentConfig, preferredRelevanceModel } from './organization-agent-config.js';
 import { syncFeedbackAssessment, syncImprovementRecommendation } from './event-intelligence.js';
 import { invalidateOrganizationAgentBriefing } from './organization-intelligence.js';
-import { buildKeepRuleFromPost, primaryBrandMoniker, buildRelevanceAgentPriorityBlock } from './relevance-policy.js';
+import {
+  buildKeepRuleFromPost,
+  buildExcludeRuleFromPost,
+  primaryBrandMoniker,
+  buildRelevanceAgentPriorityBlock,
+} from './relevance-policy.js';
 
 let _openai = null;
 function getOpenAI() {
@@ -328,6 +333,20 @@ export async function orchestrateFeedbackLearning({
     }).catch((err) => ({ applied: false, reason: err.message }));
   }
 
+  // Negative surface feedback writes hard exclude policy (dashboard + trace paths)
+  let hard_exclude = null;
+  if (NEGATIVE_LABELS.has(label) && ['not_relevant', 'too_generic', 'wrong_geography', 'unrelated_complaint', 'false_positive'].includes(label)) {
+    hard_exclude = await absorbFeedbackIntoExcludePolicy({
+      orgId,
+      post,
+      label,
+      explanation,
+      authorEmail,
+      feedbackId,
+      eventId,
+    }).catch((err) => ({ applied: false, reason: err.message }));
+  }
+
   if (forceIntel) {
     await updateOrgIntelligence(orgId, { force: true }).catch((err) => {
       console.warn('[feedback] intelligence compile skipped:', err.message);
@@ -341,6 +360,7 @@ export async function orchestrateFeedbackLearning({
     evaluation_cases: evaluationCases,
     learning_by_agent: learningByAgent,
     hard_policy,
+    hard_exclude,
   };
 }
 
@@ -420,6 +440,70 @@ export async function orchestrateOverrideLearning({
   return {
     ...learning,
     hard_policy: hardLearning,
+    explanation,
+    resulting_adjustment: resultingAdjustment,
+  };
+}
+
+// Operator confirms a trace should NOT appear on the dashboard — rejected correctly,
+// or surfaced by mistake. Writes exclude rules + relevance training examples.
+export async function orchestrateTraceSuppressLearning({
+  orgId,
+  post,
+  traceId = null,
+  eventId = null,
+  previousDecision = null,
+  label = 'not_relevant',
+  note = '',
+  authorEmail = null,
+}) {
+  const validLabels = new Set(['not_relevant', 'too_generic', 'wrong_geography', 'unrelated_complaint', 'false_positive']);
+  const feedbackLabel = validLabels.has(label) ? label : 'not_relevant';
+  const explanation = compactText(
+    note || `Operator confirmed suppression: ${previousDecision || 'candidate'} should not appear on dashboard.`,
+    1000
+  );
+  const stableEventId = eventId || post?.id;
+  const agents = agentsForFeedbackLabel(feedbackLabel, { previousDecision });
+  const resultingAdjustment = previousDecision === 'surfaced' || previousDecision === 'surfaced_override'
+    ? 'confirmed wrongly surfaced; exclusion rules + relevance examples updated'
+    : 'confirmed correct rejection; exclusion rules + relevance examples updated';
+
+  const { rows: [feedback] } = await query(
+    `INSERT INTO post_feedback (
+       org_id, post_id, event_id, label, explanation, resulting_adjustment,
+       agent_name, trace_id, created_by, signal_type
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'explicit')
+     RETURNING *`,
+    [
+      orgId,
+      post.id,
+      stableEventId,
+      feedbackLabel,
+      explanation,
+      resultingAdjustment,
+      agents[0],
+      traceId || post.ai_trace_id || null,
+      authorEmail || 'internal-operator',
+    ]
+  );
+
+  const learning = await orchestrateFeedbackLearning({
+    orgId,
+    feedbackId: feedback.id,
+    eventId: stableEventId,
+    post: { ...post, ai_trace_id: traceId || post.ai_trace_id || null },
+    label: feedbackLabel,
+    explanation,
+    authorEmail: authorEmail || 'internal-operator',
+    agents,
+    previousDecision,
+    forceIntel: true,
+    evalInputExtra: { suppress_note: explanation, confirmed_decision: previousDecision },
+  });
+
+  return {
+    ...learning,
     explanation,
     resulting_adjustment: resultingAdjustment,
   };
@@ -507,6 +591,7 @@ export async function absorbFeedbackIntoKeepPolicy({
     orgId,
     'relevance',
     {
+      model: preferredRelevanceModel(config.model),
       priority_instructions: priority,
       examples: nextExamples,
       evaluation_criteria: {
@@ -539,6 +624,121 @@ export async function absorbFeedbackIntoKeepPolicy({
     keep_rule: rule,
     keep_rule_count: nextRules.length,
     boost_terms: nextIntel.boostTerms,
+    relevance_agent_synced: true,
+  };
+}
+
+/**
+ * Persist a deterministic exclude rule + relevance priority from negative feedback
+ * so the next pipeline run cannot re-surface the same (or similar) false positive.
+ */
+export async function absorbFeedbackIntoExcludePolicy({
+  orgId,
+  post,
+  label,
+  explanation = '',
+  authorEmail = null,
+  feedbackId = null,
+  eventId = null,
+}) {
+  if (!orgId || !post) return { applied: false, reason: 'missing org or post' };
+  const excludeLabels = new Set(['not_relevant', 'too_generic', 'wrong_geography', 'unrelated_complaint', 'false_positive', 'duplicate', 'dismissed']);
+  if (!excludeLabels.has(label)) return { applied: false, reason: 'label not an exclusion signal' };
+
+  const { rows: [orgRow] } = await query(
+    'SELECT id, name, website, intel_profile FROM organizations WHERE id=$1',
+    [orgId]
+  );
+  if (!orgRow) return { applied: false, reason: 'org not found' };
+
+  const intel = { ...(orgRow.intel_profile || {}) };
+  const rule = buildExcludeRuleFromPost({
+    post,
+    org: orgRow,
+    note: explanation,
+    label,
+  });
+  rule.feedback_id = feedbackId || null;
+
+  const existing = Array.isArray(intel.learnedExcludeRules) ? intel.learnedExcludeRules : [];
+  const fingerprint = `${String(rule.exact_title || '').toLowerCase()}|${rule.moniker || ''}|${(rule.requires || []).join(',')}|${rule.label || ''}`;
+  const withoutDup = existing.filter((item) => {
+    const fp = `${String(item.exact_title || '').toLowerCase()}|${item.moniker || ''}|${(item.requires || []).join(',')}|${item.label || ''}`;
+    return fp !== fingerprint;
+  });
+  const nextRules = [rule, ...withoutDup].slice(0, 40);
+
+  const exclusions = new Set((intel.exclusionTerms || []).map(t => String(t).toLowerCase()));
+  if (rule.phrase) exclusions.add(rule.phrase);
+  // Short operator reason phrases (2–4 words) help homonym filtering
+  const reasonWords = String(explanation || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length >= 4);
+  if (reasonWords.length >= 2) exclusions.add(reasonWords.slice(0, 3).join(' '));
+
+  const nextIntel = {
+    ...intel,
+    learnedExcludeRules: nextRules,
+    exclusionTerms: [...exclusions].slice(0, 20),
+    feedbackUpdatedAt: new Date().toISOString(),
+  };
+
+  await query(
+    'UPDATE organizations SET intel_profile=$1, updated_at=NOW() WHERE id=$2',
+    [JSON.stringify(nextIntel), orgId]
+  );
+
+  const priority = buildRelevanceAgentPriorityBlock(orgRow, nextIntel);
+  const config = await getOrganizationAgentConfig(orgId, 'relevance');
+  const excludeExample = {
+    source: 'user_feedback',
+    feedback_id: feedbackId,
+    input: {
+      title: compactText(post.title, 300),
+      body: compactText(post.body, 700),
+      source: post.source || null,
+    },
+    expected: { relevant: false, should_surface: false, is_relevant: false },
+    feedback: { label, reason: compactText(explanation, 400) || null },
+  };
+  const priorExamples = Array.isArray(config.examples) ? config.examples.filter(e => e?.feedback_id !== feedbackId) : [];
+  const nextExamples = [excludeExample, ...priorExamples].slice(0, 20);
+
+  await saveOrganizationAgentConfig(
+    orgId,
+    'relevance',
+    {
+      model: preferredRelevanceModel(config.model),
+      priority_instructions: priority,
+      examples: nextExamples,
+      evaluation_criteria: {
+        ...(config.evaluation_criteria || {}),
+        case_insensitive_brand_match: true,
+        require_explicit_rejection_reason: true,
+        respect_operator_exclude_rules: true,
+      },
+    },
+    authorEmail || 'spill-feedback-learning',
+    `Suppress learning: synced relevance agent exclude policy (${nextRules.length} rules)`
+  );
+
+  if (feedbackId && eventId) {
+    await recordLearningAction({
+      orgId,
+      feedbackId,
+      eventId,
+      agentName: 'relevance',
+      actionType: 'exclude_rule',
+      before: { exclude_rule_count: existing.length, relevance_version: config.version || 0 },
+      after: { exclude_rule_count: nextRules.length, rule, relevance_priority_synced: true },
+      reason: explanation || 'Wrote deterministic exclude rule and synced Relevance Agent policy.',
+    }).catch(() => {});
+  }
+
+  invalidateOrganizationAgentBriefing(orgId);
+  return {
+    applied: true,
+    exclude_rule: rule,
+    exclude_rule_count: nextRules.length,
+    exclusion_terms: nextIntel.exclusionTerms,
     relevance_agent_synced: true,
   };
 }
@@ -611,6 +811,14 @@ export async function getOrgFeedbackContext(orgId) {
         return bits.join(' / ');
       }).filter(Boolean);
       if (keepBrief.length) lines.push(`Hard keep rules from operator overrides: ${keepBrief.join('; ')}`);
+    }
+
+    if (Array.isArray(intel.learnedExcludeRules) && intel.learnedExcludeRules.length) {
+      const excludeBrief = intel.learnedExcludeRules.slice(0, 8).map((r) => {
+        const bits = [r.label, r.exact_title ? `title~"${String(r.exact_title).slice(0, 40)}"` : null, r.moniker, (r.requires || []).slice(0, 3).join('+')].filter(Boolean);
+        return bits.join(' / ');
+      }).filter(Boolean);
+      if (excludeBrief.length) lines.push(`Hard exclude rules from operator feedback: ${excludeBrief.join('; ')}`);
     }
 
     if (!feedbackResult.rows.length) return lines.join('\n');

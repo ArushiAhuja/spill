@@ -4,6 +4,7 @@ import { buildAgentPolicyContext } from './organization-agent-config.js';
 import {
   buildBrandTerms,
   isExternalBrandMention,
+  shouldForceKeepBrandMention,
   explainRelevanceDecision,
 } from './relevance-policy.js';
 
@@ -235,7 +236,7 @@ Rules:
     // this policy — e.g. "Chimes" + "I've applied" on CadetPilot.
     let forcedKeep = false;
     if (cls.is_relevant === false && organization) {
-      if (isExternalBrandMention(post, brandTermsForGuard, organization, sourceConfigs, intel || {})) {
+      if (shouldForceKeepBrandMention(post, brandTermsForGuard, organization, sourceConfigs, intel || {})) {
         cls.is_relevant = true;
         forcedKeep = true;
         cls.reasoning = (cls.reasoning ? cls.reasoning + ' ' : '')

@@ -4,6 +4,14 @@ import { useState } from 'react'
 
 const mono = { fontFamily: 'var(--font-mono), ui-monospace, monospace' }
 
+const SUPPRESS_LABELS = [
+  { value: 'not_relevant', label: 'Not relevant to this organisation' },
+  { value: 'too_generic', label: 'Too generic / low signal' },
+  { value: 'wrong_geography', label: 'Wrong geography / market' },
+  { value: 'unrelated_complaint', label: 'Unrelated complaint' },
+  { value: 'false_positive', label: 'False positive (homonym / different brand)' },
+]
+
 function Json({ title, value }) {
   return (
     <div>
@@ -17,32 +25,48 @@ function Json({ title, value }) {
 
 function decisionColor(decision) {
   if (decision === 'surfaced' || decision === 'surfaced_override') return '#4ade80'
+  if (decision === 'confirmed_suppression') return '#94a3b8'
   if (String(decision || '').includes('reject') || String(decision || '').includes('irrelevant')) return '#f87171'
   return '#fbbf24'
 }
 
-function formatLearningSummary(learning) {
+function formatLearningSummary(learning, kind = 'override') {
   if (!learning) return ''
   if (learning.error) return `Learning partially failed: ${learning.error}`
-  const agents = Array.isArray(learning.agents) ? learning.agents.join(', ') : 'relevance, severity'
+  const agents = Array.isArray(learning.agents) ? learning.agents.join(', ') : 'relevance'
   const cases = Array.isArray(learning.evaluation_cases) ? learning.evaluation_cases.length : 0
   const byAgent = learning.learning_by_agent || {}
   const examples = Object.values(byAgent).filter((r) => r?.example_update).length
+  const hard = kind === 'override' ? learning.hard_policy : learning.hard_exclude
+  const hardNote = hard?.applied
+    ? (kind === 'override'
+      ? ` ${hard.keep_rule_count || 1} keep rule(s) written.`
+      : ` ${hard.exclude_rule_count || 1} exclude rule(s) written.`)
+    : ''
   const parts = [
-    `Labelled should_have_surfaced for ${agents}.`,
+    kind === 'override'
+      ? `Labelled should_have_surfaced for ${agents}.`
+      : `Labelled ${learning.label || 'not_relevant'} for ${agents}.`,
     examples ? `${examples} reviewed training example(s) written.` : 'Training example write attempted.',
     cases ? `${cases} evaluation case(s) created.` : null,
+    hardNote || null,
     'Intelligence profile recompile triggered.',
   ].filter(Boolean)
   return parts.join(' ')
 }
 
-export function TraceDetail({ detail, onOverride, onRefresh }) {
+export function TraceDetail({ detail, onOverride, onSuppress, onRefresh }) {
   const [note, setNote] = useState('')
+  const [suppressLabel, setSuppressLabel] = useState('not_relevant')
+  const [suppressNote, setSuppressNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [suppressBusy, setSuppressBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [suppressMessage, setSuppressMessage] = useState('')
   const [error, setError] = useState('')
+  const [suppressError, setSuppressError] = useState('')
   const [learningSummary, setLearningSummary] = useState('')
+  const [suppressLearningSummary, setSuppressLearningSummary] = useState('')
 
   if (!detail?.trace) {
     return <div style={{ color: '#64748b', fontSize: 13, padding: 12 }}>Trace detail unavailable.</div>
@@ -53,6 +77,7 @@ export function TraceDetail({ detail, onOverride, onRefresh }) {
   const candidate = detail.candidate || {}
   const rejection = detail.rejection || {}
   const override = detail.override || {}
+  const suppress = detail.suppress || {}
   const qa = detail.question_answers
   const why = qa?.why_surfaced
 
@@ -61,6 +86,7 @@ export function TraceDetail({ detail, onOverride, onRefresh }) {
   const displayUrl = candidate.url || t.url || t.metadata?.url || null
   const displayAuthor = candidate.author || t.author || t.metadata?.author || null
   const canOverride = override.available !== false && t.decision !== 'surfaced' && t.decision !== 'surfaced_override'
+  const canSuppress = suppress.available !== false && t.decision !== 'confirmed_suppression' && onSuppress
 
   async function handleOverride() {
     if (!onOverride) return
@@ -71,13 +97,32 @@ export function TraceDetail({ detail, onOverride, onRefresh }) {
     try {
       const result = await onOverride({ traceId: t.id, note })
       setMessage(`Surfaced on ${result.org_name || 'dashboard'}. Open /${result.org_slug || ''} to verify.`)
-      setLearningSummary(formatLearningSummary(result.learning))
+      setLearningSummary(formatLearningSummary(result.learning, 'override'))
       setNote('')
       if (onRefresh) await onRefresh(t.id)
     } catch (e) {
       setError(e.message || 'Override failed')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function handleSuppress() {
+    if (!onSuppress) return
+    setSuppressBusy(true)
+    setSuppressError('')
+    setSuppressMessage('')
+    setSuppressLearningSummary('')
+    try {
+      const result = await onSuppress({ traceId: t.id, label: suppressLabel, note: suppressNote })
+      setSuppressMessage('Confirmed — exclusion rules and relevance training updated.')
+      setSuppressLearningSummary(formatLearningSummary(result.learning, 'suppress'))
+      setSuppressNote('')
+      if (onRefresh) await onRefresh(t.id)
+    } catch (e) {
+      setSuppressError(e.message || 'Suppression feedback failed')
+    } finally {
+      setSuppressBusy(false)
     }
   }
 
@@ -174,12 +219,64 @@ export function TraceDetail({ detail, onOverride, onRefresh }) {
         </div>
       )}
 
+      {(canSuppress || suppress.already_confirmed) && (
+        <div style={{ marginTop: 12, padding: 10, background: '#151018', borderRadius: 6, border: '1px solid #7f1d1d' }}>
+          <div style={{ ...mono, color: '#fca5a5', fontSize: 9, marginBottom: 6 }}>CONFIRM SHOULD NOT SHOW</div>
+          {suppress.already_confirmed ? (
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>
+              Operator confirmed this should not appear
+              {suppress.label ? ` (${String(suppress.label).replace(/_/g, ' ')})` : ''}.
+            </div>
+          ) : (
+            <>
+              <p style={{ margin: '0 0 8px', fontSize: 12, color: '#94a3b8', lineHeight: 1.45 }}>
+                Tell Spill why this post should stay off the dashboard. Your reason feeds exclude rules and relevance training.
+              </p>
+              <select
+                value={suppressLabel}
+                onChange={(e) => setSuppressLabel(e.target.value)}
+                style={{ width: '100%', boxSizing: 'border-box', background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8, fontSize: 12, fontFamily: 'inherit', marginBottom: 8 }}
+              >
+                {SUPPRESS_LABELS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <textarea
+                value={suppressNote}
+                onChange={(e) => setSuppressNote(e.target.value)}
+                placeholder="Why should this NOT be shown? (e.g. church bells, unrelated product, wrong country…)"
+                rows={2}
+                style={{ width: '100%', boxSizing: 'border-box', background: '#0d0f1a', color: '#e2e8f0', border: '1px solid #243047', borderRadius: 6, padding: 8, fontSize: 12, fontFamily: 'inherit' }}
+              />
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  disabled={suppressBusy || !onSuppress}
+                  onClick={handleSuppress}
+                  style={{ padding: '8px 12px', border: 0, borderRadius: 6, background: '#991b1b', color: 'white', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12 }}
+                >
+                  {suppressBusy ? 'recording…' : 'confirm should NOT show'}
+                </button>
+              </div>
+            </>
+          )}
+          {suppressMessage && <div style={{ marginTop: 8, color: '#4ade80', fontSize: 12 }}>{suppressMessage}</div>}
+          {suppressError && <div style={{ marginTop: 8, color: '#f87171', fontSize: 12 }}>{suppressError}</div>}
+          {suppressLearningSummary && (
+            <div style={{ marginTop: 8, padding: 8, background: '#0d0f1a', borderRadius: 6, fontSize: 11, color: '#94a3b8', lineHeight: 1.45 }}>
+              <div style={{ ...mono, color: '#fca5a5', fontSize: 9, marginBottom: 4 }}>EXCLUSION LEARNING APPLIED</div>
+              {suppressLearningSummary}
+            </div>
+          )}
+        </div>
+      )}
+
       {observations.length === 0 && (
         <p style={{ color: '#64748b', fontSize: 12, marginTop: 12 }}>No agent observations recorded for this trace.</p>
       )}
 
       {observations.map((o) => (
-        <details key={o.id} style={{ borderTop: '1px solid #1e2535', padding: '10px 0' }} open={/source processing|relevance|signal quality|operator override/i.test(o.name || '')}>
+        <details key={o.id} style={{ borderTop: '1px solid #1e2535', padding: '10px 0' }} open={/source processing|relevance|signal quality|operator override|operator suppression/i.test(o.name || '')}>
           <summary style={{ cursor: 'pointer', fontSize: 13 }}>
             {o.name}{' '}
             <span style={{ ...mono, color: '#64748b', fontSize: 10 }}>

@@ -96,6 +96,13 @@ export default function IntelligenceConsole() {
     return result
   }
 
+  async function suppressTrace({ traceId, label, note }) {
+    const result = await api.confirmObservabilityTraceSuppression(traceId, { label, note })
+    const refreshed = await api.getObservabilityTraces({ trace_id: traceId })
+    setDetail(refreshed)
+    return result
+  }
+
   async function setOperator(email, granted, orgId = null) {
     setOperatorBusy(true)
     setOperatorMsg('')
@@ -311,7 +318,7 @@ export default function IntelligenceConsole() {
         <div style={card}>
           {traceError && <div style={{ color:'#f87171', fontSize:12, marginBottom:10 }}>{traceError}</div>}
           {detail
-            ? <TraceDetail detail={detail} onOverride={overrideTrace} onRefresh={openTrace} />
+            ? <TraceDetail detail={detail} onOverride={overrideTrace} onSuppress={suppressTrace} onRefresh={openTrace} />
             : <div style={{ color:'#64748b', fontSize:13, padding:20 }}>Select an event to inspect its original content, agent outputs, prompt versions, model usage, and quality decision.</div>}
         </div>
       </section>

@@ -99,6 +99,13 @@ export default function OrgIntelligencePage({ params }) {
     return result
   }
 
+  async function suppressTrace({ traceId, label, note }) {
+    const result = await api.confirmObservabilityTraceSuppression(traceId, { label, note })
+    const detail = await api.getObservabilityTraces({ trace_id: traceId, org_id: id })
+    setTraceDetail(detail)
+    return result
+  }
+
   async function save() {
     setSaving(true)
     setError('')
@@ -218,6 +225,7 @@ export default function OrgIntelligencePage({ params }) {
       onLoadOlder={() => loadTraces({ append: true, before: tracePage?.next_before })}
       onOpen={openTrace}
       onOverride={overrideTrace}
+      onSuppress={suppressTrace}
     />
 
     <ContextPanel organization={data.organization} context={data.prompt_context} agentConfigs={data.agent_configs} saving={saving} onSaveProfile={saveProfile} />
@@ -289,6 +297,7 @@ function RecentTraces({
   onLoadOlder,
   onOpen,
   onOverride,
+  onSuppress,
 }) {
   const oldestShown = traces?.length ? traces[traces.length - 1]?.created_at : null
   return (
@@ -392,7 +401,7 @@ function RecentTraces({
         {error && <div style={{ color: '#f87171', fontSize: 12, marginBottom: 8 }}>{error}</div>}
         {loading && <div style={{ color: '#64748b', fontSize: 12 }}>Loading trace…</div>}
         {!loading && detail ? (
-          <TraceDetail detail={detail} onOverride={onOverride} onRefresh={onOpen} />
+          <TraceDetail detail={detail} onOverride={onOverride} onSuppress={onSuppress} onRefresh={onOpen} />
         ) : !loading && (
           <div style={{ color: '#64748b', fontSize: 12, padding: 8 }}>
             Select a trace to inspect the original content, why Spill rejected/suppressed it, and optionally override it onto the dashboard.

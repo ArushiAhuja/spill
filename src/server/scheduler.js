@@ -19,6 +19,8 @@ import {
   isSelfPublished,
   isBrandQueryPositive,
   isExternalBrandMention,
+  matchesExclusionPolicy,
+  shouldForceKeepBrandMention,
   stripHtmlNoise,
   explainRelevanceDecision,
 } from './relevance-policy.js';
@@ -258,7 +260,6 @@ export async function runOrgCycle(orgId) {
     const intelPainKws = (intel.customerPainPoints || []).map(k => k.toLowerCase());
     const intelRiskKws = (intel.operationalRiskQueries || []).concat(intel.highRiskTopics || []).map(k => k.toLowerCase());
     const intelGeoTerms = (intel.geographyTerms || []).map(k => k.toLowerCase());
-    const intelExclusionTerms = (intel.exclusionTerms || []).map(k => k.toLowerCase());
 
     const { rows: sourceConfigs } = await query(
       'SELECT source, enabled, credentials, config FROM source_configs WHERE org_id = $1 AND enabled = true',
@@ -359,14 +360,12 @@ export async function runOrgCycle(orgId) {
     // Tier 3 — Configured subreddit posts without keyword match → AI operational relevance filter
 
     function containsExclusion(text) {
-      if (!intelExclusionTerms.length) return false;
-      const lower = text.toLowerCase();
-      return intelExclusionTerms.some(ex => lower.includes(ex));
+      return matchesExclusionPolicy({ title: text, body: '' }, intel);
     }
 
     function tier1Match(p) {
+      if (matchesExclusionPolicy(p, intel)) return false;
       const text = `${p.title || ''} ${p.body || ''}`;
-      if (containsExclusion(text)) return false;
       // Brand phrase / soft brand aliases (org name, parent names, intel keywords)
       if (containsBrand(text)) return true;
       // Moniker + context (e.g. "Chimes" + admissions/pilot intent) counts as direct brand
@@ -507,7 +506,7 @@ export async function runOrgCycle(orgId) {
     for (const post of allClassified) {
       // Flag explicit third-party brand hits so quality gate does not zero them out
       // just because dimension scores are low (common for short admissions posts).
-      if (isExternalBrandMention(post, brandTerms, org, sourceConfigs, intel)) {
+      if (shouldForceKeepBrandMention(post, brandTerms, org, sourceConfigs, intel)) {
         post.external_brand_mention = true;
       }
       if (!post.relevance_explanation) {

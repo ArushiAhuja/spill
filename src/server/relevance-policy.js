@@ -393,7 +393,98 @@ export function isBrandQueryPositive(post = {}, brandTerms = [], brandQueries = 
   return textMentionsBrand(q, brandTerms);
 }
 
+/** True when operator feedback or intel exclusions say this post must not surface. */
+export function matchesLearnedExcludeRule(post = {}, intel = {}) {
+  const rules = Array.isArray(intel.learnedExcludeRules) ? intel.learnedExcludeRules : [];
+  if (!rules.length) return false;
+  const blob = stripHtmlNoise(`${post.title || ''} ${post.body || ''} ${post.url || ''}`).toLowerCase();
+  const title = stripHtmlNoise(post.title || '').toLowerCase();
+
+  for (const rule of rules) {
+    if (!rule || rule.active === false) continue;
+
+    if (rule.exact_title) {
+      const et = String(rule.exact_title).toLowerCase().trim();
+      if (et && (title === et || (et.length >= 4 && title.includes(et)))) return true;
+    }
+
+    if (rule.phrase) {
+      const phrase = String(rule.phrase).toLowerCase().trim();
+      if (phrase.length >= 3 && blob.includes(phrase)) {
+        const req = Array.isArray(rule.requires) ? rule.requires.map(r => String(r).toLowerCase()) : [];
+        if (!req.length || req.some(r => blob.includes(r))) return true;
+      }
+    }
+
+    if (rule.moniker) {
+      const m = String(rule.moniker).toLowerCase().trim();
+      if (m.length < 4) continue;
+      if (!new RegExp(`\\b${m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(blob)) continue;
+      const req = Array.isArray(rule.requires) ? rule.requires.map(r => String(r).toLowerCase()) : [];
+      if (!req.length || req.some(r => blob.includes(r))) return true;
+    }
+  }
+  return false;
+}
+
+export function matchesExclusionPolicy(post = {}, intel = {}) {
+  if (matchesLearnedExcludeRule(post, intel)) return true;
+  const blob = stripHtmlNoise(`${post.title || ''} ${post.body || ''}`).toLowerCase();
+  for (const ex of intel.exclusionTerms || []) {
+    const term = String(ex || '').toLowerCase().trim();
+    if (term.length >= 3 && blob.includes(term)) return true;
+  }
+  return false;
+}
+
+/**
+ * Deterministic exclude rule from operator "should NOT show" feedback.
+ * Mirrors keep rules but blocks similar posts from surfacing.
+ */
+export function buildExcludeRuleFromPost({ post = {}, org = {}, note = '', label = 'not_relevant' } = {}) {
+  const moniker = primaryBrandMoniker(org.name);
+  const blob = stripHtmlNoise(`${post.title || ''} ${post.body || ''}`);
+  const lower = blob.toLowerCase();
+  const requires = GENERIC_INTENT_SIGNALS.filter(s => s.length >= 4 && lower.includes(s)).slice(0, 8);
+  const title = stripHtmlNoise(post.title || '').slice(0, 200);
+  const rule = {
+    id: `exclude_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    source: 'operator_suppression',
+    label: label || 'not_relevant',
+    moniker: moniker || null,
+    phrase: null,
+    exact_title: title || null,
+    requires,
+    note: String(note || '').slice(0, 300) || null,
+    sample_title: title || null,
+    created_at: new Date().toISOString(),
+    active: true,
+  };
+  const full = String(org.name || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+  if (full && lower.includes(full)) rule.phrase = full;
+  else if (moniker && lower.includes(moniker)) {
+    const two = brandKeyword(org.name);
+    if (two && two.includes(' ') && lower.includes(two)) rule.phrase = two;
+  }
+  return rule;
+}
+
+/**
+ * Strong deterministic keep for classifier override — learned keep, full brand
+ * term, or brand-query hit. Bare moniker + generic intent alone is NOT enough
+ * (homonym risk); the upgraded relevance model decides those cases.
+ */
+export function shouldForceKeepBrandMention(post = {}, brandTerms = [], org = {}, sourceConfigs = [], intel = {}) {
+  if (matchesExclusionPolicy(post, intel)) return false;
+  if (isSelfPublished(post, org, sourceConfigs, intel)) return false;
+  if (matchesLearnedKeepRule(post, intel)) return true;
+  const text = `${post.title || ''} ${post.body || ''} ${post.publisher || ''}`;
+  if (textMentionsBrand(text, brandTerms) || isBrandQueryPositive(post, brandTerms)) return true;
+  return false;
+}
+
 export function isExternalBrandMention(post = {}, brandTerms = [], org = {}, sourceConfigs = [], intel = {}) {
+  if (matchesExclusionPolicy(post, intel)) return false;
   if (isSelfPublished(post, org, sourceConfigs, intel)) return false;
   if (matchesLearnedKeepRule(post, intel)) return true;
   const text = `${post.title || ''} ${post.body || ''} ${post.publisher || ''}`;
@@ -515,6 +606,25 @@ export function buildRelevanceAgentPriorityBlock(org = {}, intel = {}) {
       ].filter(Boolean);
       lines.push(`- ${bits.join('; ')}`);
     }
+  }
+
+  const excludeRules = Array.isArray(intel.learnedExcludeRules) ? intel.learnedExcludeRules.filter(r => r && r.active !== false) : [];
+  if (excludeRules.length) {
+    lines.push('Operator-learned EXCLUDE patterns (never surface similar posts):');
+    for (const r of excludeRules.slice(0, 15)) {
+      const bits = [
+        r.label ? `reason=${r.label}` : null,
+        r.exact_title ? `title~"${String(r.exact_title).slice(0, 60)}"` : null,
+        r.moniker ? `moniker=${r.moniker}` : null,
+        r.phrase ? `phrase="${r.phrase}"` : null,
+        Array.isArray(r.requires) && r.requires.length ? `needs:${r.requires.slice(0, 4).join('|')}` : null,
+        r.note ? `note:${String(r.note).slice(0, 80)}` : null,
+      ].filter(Boolean);
+      lines.push(`- ${bits.join('; ')}`);
+    }
+  }
+  if (Array.isArray(intel.exclusionTerms) && intel.exclusionTerms.length) {
+    lines.push(`Exclusion terms (homonyms / false positives): ${intel.exclusionTerms.slice(0, 12).join(', ')}`);
   }
   return lines.join('\n');
 }

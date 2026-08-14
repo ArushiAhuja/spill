@@ -6,6 +6,7 @@ import { query } from '../../../../../server/db.js';
 import { explainTrace } from '../../../../../server/event-intelligence.js';
 import {
   buildRejectionSummary,
+  confirmTraceSuppression,
   extractCandidateFromTrace,
   overrideTraceToDashboard,
 } from '../../../../../server/trace-override.js';
@@ -47,6 +48,11 @@ function buildTracePayload(traceRow, observations) {
       already_on_dashboard: Boolean(traceRow.post_id) && (decision === 'surfaced' || decision === 'surfaced_override'),
       post_id: traceRow.post_id || null,
       dashboard_path: traceRow.org_slug ? `/${traceRow.org_slug}` : null,
+    },
+    suppress: {
+      available: decision !== 'confirmed_suppression',
+      already_confirmed: decision === 'confirmed_suppression',
+      label: traceRow.metadata?.suppression_label || traceRow.decision_evidence?.operator_suppression?.label || null,
     },
   };
 }
@@ -198,7 +204,6 @@ export async function POST(request) {
     const action = body.action || 'override';
     const traceId = body.trace_id || body.id;
     if (!traceId) return NextResponse.json({ error: 'trace_id is required' }, { status: 400 });
-    if (action !== 'override') return NextResponse.json({ error: 'unsupported action' }, { status: 400 });
 
     const { rows: traces } = await query(
       `SELECT t.id, t.org_id FROM ai_traces t WHERE t.id::text=$1 OR t.trace_key=$1`,
@@ -207,12 +212,26 @@ export async function POST(request) {
     if (!traces[0]) return NextResponse.json({ error: 'not found' }, { status: 404 });
     if (!scopeAllowsOrg(auth.scope, traces[0].org_id)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
-    const result = await overrideTraceToDashboard({
-      traceId: traces[0].id,
-      user: auth.user,
-      note: typeof body.note === 'string' ? body.note : '',
-    });
-    return NextResponse.json({ ok: true, ...result });
+    if (action === 'override') {
+      const result = await overrideTraceToDashboard({
+        traceId: traces[0].id,
+        user: auth.user,
+        note: typeof body.note === 'string' ? body.note : '',
+      });
+      return NextResponse.json({ ok: true, ...result });
+    }
+
+    if (action === 'confirm_suppression' || action === 'suppress') {
+      const result = await confirmTraceSuppression({
+        traceId: traces[0].id,
+        user: auth.user,
+        label: typeof body.label === 'string' ? body.label : 'not_relevant',
+        note: typeof body.note === 'string' ? body.note : '',
+      });
+      return NextResponse.json({ ok: true, ...result });
+    }
+
+    return NextResponse.json({ error: 'unsupported action' }, { status: 400 });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: err.status || 500 });
   }
