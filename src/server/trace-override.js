@@ -100,16 +100,16 @@ export function buildRejectionSummary(trace, observations = []) {
 
   // Per-agent: what each recorded agent produced
   const agentLines = [];
-  for (const obs of [
+  for (const entry of [
     ['Source', sourceObs],
     ['Relevance', relevanceObs],
     ['Category', categoryObs],
     ['Severity', severityObs],
     ['Quality', qualityObs],
   ]) {
-    const [label, obs] = obs;
-    if (!obs) continue;
-    const snippet = formatAgentOutputSnippet(obs.output);
+    const [label, observation] = entry;
+    if (!observation) continue;
+    const snippet = formatAgentOutputSnippet(observation.output);
     if (snippet) agentLines.push(`${label} agent: ${snippet}.`);
   }
   lines.push(...agentLines);
